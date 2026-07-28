@@ -1,0 +1,9 @@
+.DS_Store
+
+# Go build and test artifacts
+build/
+agent/hub-net
+*.out
+*.test
+coverage*
+

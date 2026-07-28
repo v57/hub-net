@@ -1,0 +1,247 @@
+package hubnet
+
+import (
+	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"errors"
+	"os"
+	"path/filepath"
+	"testing"
+
+	"github.com/v57/hub-net/config"
+	"github.com/v57/hub-net/keychain"
+	"github.com/v57/hub-net/platform"
+	"github.com/v57/hub-net/profile"
+	"github.com/v57/hub-net/version"
+	"github.com/v57/hub-net/wireguard"
+)
+
+func TestProductionPreflightFailsBeforeIdentityCreation(t *testing.T) {
+	cfg := newConfig(t)
+	agent, err := New(Options{
+		Config:     cfg,
+		Production: true,
+		Preflight: func() error {
+			return platform.ErrMissingPrivileges
+		},
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	err = agent.Prepare(context.Background())
+	if !errors.Is(err, platform.ErrMissingPrivileges) {
+		t.Fatalf("Prepare err = %v, want ErrMissingPrivileges", err)
+	}
+	if _, statErr := os.Stat(cfg.IdentityPath); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("identity created before preflight: %v", statErr)
+	}
+	if agent.Profile() != nil {
+		t.Fatal("profile created before preflight")
+	}
+}
+
+func TestInterfaceNameDefaultsAndCanBeOverridden(t *testing.T) {
+	defaultAgent, err := New(Options{Config: newConfig(t)})
+	if err != nil {
+		t.Fatalf("New default: %v", err)
+	}
+	if defaultAgent.interfaceName != "hubnet0" {
+		t.Fatalf("default interface = %q, want hubnet0", defaultAgent.interfaceName)
+	}
+
+	customAgent, err := New(Options{
+		Config:        newConfig(t),
+		InterfaceName: "hubnet-provider",
+	})
+	if err != nil {
+		t.Fatalf("New custom: %v", err)
+	}
+	if customAgent.interfaceName != "hubnet-provider" {
+		t.Fatalf("custom interface = %q, want hubnet-provider", customAgent.interfaceName)
+	}
+}
+
+// newConfig returns a config rooted under a temp dir so Prepare does not touch
+// the system state directory.
+func newConfig(t *testing.T) config.Config {
+	t.Helper()
+	cfg := config.Defaults()
+	cfg.StateDir = filepath.Join(t.TempDir(), "state")
+	cfg.IdentityPath = filepath.Join(cfg.StateDir, config.DefaultIdentityFile)
+	cfg.WireGuardKeyPath = filepath.Join(cfg.StateDir, config.DefaultWireGuardKeyFile)
+	cfg.AgentSocketPath = shortSocketPath(t)
+	cfg.HubAddress = 1997
+	return cfg
+}
+
+// shortSocketPath returns a short Unix socket path under the system temp dir.
+// macOS caps Unix socket paths near 104 bytes, and t.TempDir() plus a long
+// test name overflows that. Prepare binds the socket synchronously, so the
+// path must fit at construction time.
+func shortSocketPath(t *testing.T) string {
+	t.Helper()
+	var buf [6]byte
+	if _, err := rand.Read(buf[:]); err != nil {
+		t.Fatalf("rand: %v", err)
+	}
+	return filepath.Join(os.TempDir(), "hn-"+hex.EncodeToString(buf[:])+".sock")
+}
+
+func TestPrepareLoadsAndDerivesKeys(t *testing.T) {
+	agent, err := New(Options{Config: newConfig(t)})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if err := agent.Prepare(context.Background()); err != nil {
+		t.Fatalf("Prepare: %v", err)
+	}
+	snap := agent.profile.Snapshot()
+	if snap.State != profile.StateUnregistered {
+		t.Fatalf("state = %s, want unregistered", snap.State)
+	}
+	if len(snap.WireGuardPubKey) != keychain.PrivateKeyLength {
+		t.Fatalf("wireguard public key length = %d, want %d", len(snap.WireGuardPubKey), keychain.PrivateKeyLength)
+	}
+}
+
+func TestPrepareIsIdempotentAcrossInstances(t *testing.T) {
+	cfg := newConfig(t)
+
+	first, err := New(Options{Config: cfg})
+	if err != nil {
+		t.Fatalf("New first: %v", err)
+	}
+	if err := first.Prepare(context.Background()); err != nil {
+		t.Fatalf("Prepare first: %v", err)
+	}
+	firstSnap := first.profile.Snapshot()
+
+	second, err := New(Options{Config: cfg})
+	if err != nil {
+		t.Fatalf("New second: %v", err)
+	}
+	if err := second.Prepare(context.Background()); err != nil {
+		t.Fatalf("Prepare second: %v", err)
+	}
+	secondSnap := second.profile.Snapshot()
+
+	if firstSnap.ProfileKey != secondSnap.ProfileKey {
+		t.Fatalf("profile identity not persistent: %s != %s", firstSnap.ProfileKey, secondSnap.ProfileKey)
+	}
+	if firstSnap.WireGuardPubKey == nil || string(firstSnap.WireGuardPubKey) != string(secondSnap.WireGuardPubKey) {
+		t.Fatalf("wireguard public key not persistent")
+	}
+}
+
+func TestVersionMatchesProtocol(t *testing.T) {
+	got := version.String()
+	if got == "" {
+		t.Fatalf("version string empty")
+	}
+	if version.Major != wireGuardExpectedWireVersion {
+		t.Fatalf("version.Major = %d, want %d", version.Major, wireGuardExpectedWireVersion)
+	}
+}
+
+// wireGuardExpectedWireVersion is kept here to avoid importing version's
+// indirect protocol dependency in tests that only care about the constant.
+const wireGuardExpectedWireVersion = 1
+
+func TestAdapterDefaultsToFake(t *testing.T) {
+	agent, err := New(Options{Config: newConfig(t)})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if _, ok := agent.Adapter().(*wireguard.FakeAdapter); !ok {
+		t.Fatalf("expected FakeAdapter by default")
+	}
+}
+
+func TestResolverPreparedInactive(t *testing.T) {
+	agent, err := New(Options{Config: newConfig(t)})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if agent.Resolver() == nil {
+		t.Fatal("resolver is nil")
+	}
+	if _, err := agent.Resolver().Lookup("missing.hub.invalid"); err == nil {
+		t.Fatal("inactive resolver unexpectedly answered")
+	}
+}
+
+func TestConfigureInterfaceUsesRegisteredOverlayAndRollsBack(t *testing.T) {
+	adapter := wireguard.NewFakeAdapter()
+	agent, err := New(Options{Config: newConfig(t), Adapter: adapter})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if err := agent.Prepare(context.Background()); err != nil {
+		t.Fatalf("Prepare: %v", err)
+	}
+	agent.profile.ConfirmRegistration("100.96.0.42", "network", 1)
+	if err := agent.configureInterface(); err != nil {
+		t.Fatalf("configureInterface: %v", err)
+	}
+	state, up := adapter.State()
+	if !up {
+		t.Fatal("wireguard interface not up")
+	}
+	if got := state.Address.String(); got != "100.96.0.42" {
+		t.Fatalf("address = %s, want 100.96.0.42", got)
+	}
+	if state.ListenPort != wireguard.DefaultPort {
+		t.Fatalf("listen port = %d, want %d", state.ListenPort, wireguard.DefaultPort)
+	}
+	if len(state.PrivateKey) != keychain.PrivateKeyLength {
+		t.Fatalf("private key length = %d", len(state.PrivateKey))
+	}
+	if err := agent.stopInterface(); err != nil {
+		t.Fatalf("stopInterface: %v", err)
+	}
+	if _, up := adapter.State(); up {
+		t.Fatal("wireguard interface remains up")
+	}
+}
+
+func TestConfigureInterfaceFailsClosed(t *testing.T) {
+	for _, address := range []string{"", "192.0.2.1", "not-an-address"} {
+		t.Run(address, func(t *testing.T) {
+			adapter := wireguard.NewFakeAdapter()
+			agent, err := New(Options{Config: newConfig(t), Adapter: adapter})
+			if err != nil {
+				t.Fatalf("New: %v", err)
+			}
+			if err := agent.Prepare(context.Background()); err != nil {
+				t.Fatalf("Prepare: %v", err)
+			}
+			agent.profile.ConfirmRegistration(address, "network", 1)
+			if err := agent.configureInterface(); err == nil {
+				t.Fatal("configureInterface unexpectedly succeeded")
+			}
+			if _, up := adapter.State(); up {
+				t.Fatal("wireguard interface left up after failure")
+			}
+		})
+	}
+}
+
+func TestConfigureInterfaceUpFailureRollsBack(t *testing.T) {
+	adapter := wireguard.NewFakeAdapter()
+	agent, err := New(Options{Config: newConfig(t), Adapter: adapter})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if err := agent.Prepare(context.Background()); err != nil {
+		t.Fatalf("Prepare: %v", err)
+	}
+	agent.profile.ConfirmRegistration("100.96.0.43", "network", 1)
+	adapter.SetUpError(errors.New("injected setup failure"))
+	if err := agent.configureInterface(); err == nil {
+		t.Fatal("configureInterface unexpectedly succeeded")
+	}
+	if _, up := adapter.State(); up {
+		t.Fatal("wireguard interface left up after setup failure")
+	}
+}

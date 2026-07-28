@@ -1,0 +1,14 @@
+#!/bin/sh
+set -eu
+
+script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+was_active=false
+if systemctl is-active --quiet hub-net.service; then
+  was_active=true
+fi
+
+"$script_dir/install"
+
+if [ "$was_active" = true ]; then
+  systemctl restart hub-net.service
+fi

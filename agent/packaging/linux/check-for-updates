@@ -1,0 +1,10 @@
+#!/bin/sh
+set -eu
+
+if [ "$#" -ne 1 ]; then
+  echo "usage: check-for-updates EXPECTED_VERSION" >&2
+  exit 2
+fi
+
+installed=$(/usr/bin/hub-net --version 2>/dev/null || true)
+[ "$installed" != "$1" ]

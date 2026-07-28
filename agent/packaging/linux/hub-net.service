@@ -1,0 +1,35 @@
+[Unit]
+Description=Hub Network Agent
+Documentation=https://github.com/v57/hub-net
+After=network-online.target systemd-resolved.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=hub-net
+Group=hub-net
+ExecStart=/usr/bin/hub-net
+Restart=on-failure
+RestartSec=5s
+AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+ReadWritePaths=/var/lib/hub-net /run/hub-net
+RuntimeDirectory=hub-net
+RuntimeDirectoryMode=0750
+StateDirectory=hub-net
+StateDirectoryMode=0700
+UMask=0007
+
+[Install]
+WantedBy=multi-user.target

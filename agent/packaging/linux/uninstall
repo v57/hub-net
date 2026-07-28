@@ -1,0 +1,17 @@
+#!/bin/sh
+set -eu
+
+if [ "$(id -u)" -ne 0 ]; then
+  echo "hub-net uninstall: root privileges required" >&2
+  exit 1
+fi
+
+systemctl disable --now hub-net.service 2>/dev/null || true
+rm -f \
+  /usr/bin/hub-net \
+  /usr/lib/systemd/system/hub-net.service \
+  /usr/lib/sysusers.d/hub-net.conf \
+  /usr/lib/tmpfiles.d/hub-net.conf
+systemctl daemon-reload
+
+echo "hub-net package removed; identity preserved in /var/lib/hub-net"

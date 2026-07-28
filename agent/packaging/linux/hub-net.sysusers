@@ -1,0 +1,2 @@
+u hub-net - "Hub Network agent" /var/lib/hub-net -
+m hub-net hub-net
