@@ -87,6 +87,24 @@ bun "$launcher_driver" update hub-net.service \
 [[ $(/usr/bin/hub-net --version) == "$new_version" ]]
 ! systemctl is-active --quiet hub-net.service
 
+# Downgrade uses the same inactive-safe package path. Persistent singleton
+# identity and WireGuard material must remain byte-identical in both
+# directions; rollback must never opt the machine into gateway serving.
+bun "$launcher_driver" update hub-net.service \
+  "$work_dir/$old_name/packaging/linux/update"
+[[ $(/usr/bin/hub-net --version) == "$old_version" ]]
+! systemctl is-active --quiet hub-net.service
+if [[ -n "$identity_before" ]]; then
+  [[ $(sha256sum /var/lib/hub-net/profile.identity | awk '{print $1}') == "$identity_before" ]]
+fi
+if [[ -n "$wireguard_before" ]]; then
+  [[ $(sha256sum /var/lib/hub-net/wireguard.key | awk '{print $1}') == "$wireguard_before" ]]
+fi
+bun "$launcher_driver" update hub-net.service \
+  "$work_dir/$new_name/packaging/linux/update"
+[[ $(/usr/bin/hub-net --version) == "$new_version" ]]
+! systemctl is-active --quiet hub-net.service
+
 systemctl show hub-net.service \
   -p User -p Group -p AmbientCapabilities -p CapabilityBoundingSet \
   -p NoNewPrivileges -p ProtectSystem -p ProtectHome -p PrivateTmp \
@@ -107,4 +125,5 @@ fi
 bun "$launcher_driver" install hub-net.service \
   "$work_dir/$old_name/packaging/linux/install"
 [[ $(/usr/bin/hub-net --version) == "$old_installed_version" || -z "$old_installed_version" ]]
-echo "PASS: Launcher install/update/uninstall, checksum, static size, modes, hardening, identity preservation"
+go test "$root_dir/membership" -run '^TestSingletonMigrationPreservesFilesAndDisablesGateway$' -count=1
+echo "PASS: Launcher install/upgrade/downgrade/uninstall, migration, gateway-off default, identity preservation"

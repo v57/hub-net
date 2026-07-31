@@ -7,7 +7,7 @@ GOOS ?= $(shell $(GO) env GOOS)
 GOARCH ?= $(shell $(GO) env GOARCH)
 PACKAGE_NAME = hub-net-$(VERSION)-$(GOOS)-$(GOARCH)
 
-.PHONY: all build test package install integration-linux-package integration-hn706-release integration-machine-restart-prepare integration-machine-restart-verify
+.PHONY: all build test package install integration-linux-package integration-multi-hub-linux integration-hn706-release integration-machine-restart-prepare integration-machine-restart-verify
 
 all: build
 
@@ -46,6 +46,9 @@ install: build
 
 integration-linux-package:
 	./integration/linux_package.sh
+
+integration-multi-hub-linux:
+	./integration/multi_hub_linux.sh
 
 integration-hn706-release:
 	../../hub-pro/integration/hn706_release.sh

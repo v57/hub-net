@@ -25,6 +25,10 @@ func (s *stubHandler) Status(req StatusRequest) (StatusResponse, error) {
 	return s.status, s.err
 }
 
+func (s *stubHandler) BindingProof(req BindingProofRequest) (BindingProofResponse, error) {
+	return BindingProofResponse{}, s.err
+}
+
 func TestNewHandlerServerWrapsHandler(t *testing.T) {
 	h := &stubHandler{status: StatusResponse{Ready: true, ServerTime: time.Now()}}
 	server := NewHandlerServer(h)

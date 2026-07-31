@@ -136,6 +136,7 @@ func NewServer(opts ServerOptions) (*Server, error) {
 	mux.HandleFunc("/challenge", server.handleChallenge)
 	mux.HandleFunc("/attest", server.handleAttest)
 	mux.HandleFunc("/status", server.handleStatus)
+	mux.HandleFunc("/binding/proof", server.handleBindingProof)
 	mux.HandleFunc("/", server.handleUnknown)
 	server.httpServer = &http.Server{
 		Handler:     http.HandlerFunc(server.withPeerCheck(mux.ServeHTTP)),
@@ -332,6 +333,24 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	}
 	if resp.Type == "" {
 		resp.Type = MessageStatusRequest
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+func (s *Server) handleBindingProof(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "use POST")
+		return
+	}
+	var req BindingProofRequest
+	if err := decodeRequest(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	resp, err := s.opts.Handler.BindingProof(req)
+	if err != nil {
+		writeHandlerError(w, err)
+		return
 	}
 	writeJSON(w, http.StatusOK, resp)
 }

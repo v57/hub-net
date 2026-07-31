@@ -21,7 +21,9 @@ import (
 	"fmt"
 	"log/slog"
 	"net/netip"
+	"os"
 	"sync"
+	"time"
 
 	"github.com/v57/channel-go/channelgo"
 	"github.com/v57/hub-net/config"
@@ -29,16 +31,19 @@ import (
 	"github.com/v57/hub-net/control"
 	"github.com/v57/hub-net/dnsresolver"
 	"github.com/v57/hub-net/enforcement"
+	"github.com/v57/hub-net/gateway"
 	"github.com/v57/hub-net/grant"
 	"github.com/v57/hub-net/ipc"
 	"github.com/v57/hub-net/keychain"
 	"github.com/v57/hub-net/logging"
 	"github.com/v57/hub-net/platform"
 	"github.com/v57/hub-net/profile"
+	"github.com/v57/hub-net/publications"
 	"github.com/v57/hub-net/version"
 	"github.com/v57/hub-net/wireguard"
 	hubservice "github.com/v57/hub-service-go"
 	"github.com/v57/hub-service-go/identity"
+	"github.com/v57/hub-service-go/network"
 	"github.com/v57/hub-service-go/protocol"
 )
 
@@ -78,6 +83,12 @@ type Agent struct {
 	candidateChecker   connection.CandidateChecker
 	handshakeChecker   connection.HandshakeChecker
 	preflight          func() error
+	onConnect          func(context.Context, *channelgo.Sender)
+	activateNetwork    func() error
+	initialShares      []publications.Entry
+	gatewayBackend     gateway.Backend
+	gatewayAllowed     bool
+	gatewayActive      bool
 
 	// Trusted per-resource authorization generations. The production agent
 	// populates this from a network/resource/generations subscription; the
@@ -115,6 +126,21 @@ type Options struct {
 	InterfaceName string
 	// Preflight overrides the production probe in tests.
 	Preflight func() error
+	// OnConnect runs after profile, interface, and DNS activation on every Hub
+	// connection. Multi-Hub daemon uses it to read one hub/header value,
+	// cancel that stream, and persist refreshed display metadata.
+	OnConnect func(context.Context, *channelgo.Sender)
+	// ActivateNetwork installs per-Hub policy routing and translation after
+	// WireGuard interface creation but before DNS/application exposure.
+	ActivateNetwork func() error
+	// InitialShares are persisted daemon-owned publications declared before
+	// Start so connection and reconnect publish the complete desired set.
+	InitialShares []publications.Entry
+	// GatewayAllowed restores explicit per-Hub gateway serving intent.
+	// False is always the default for new and migrated memberships.
+	GatewayAllowed bool
+	// GatewayBackend owns forwarding, firewall, NAT, and flow teardown.
+	GatewayBackend gateway.Backend
 }
 
 // New constructs an Agent. Defaults are applied; the caller may override the
@@ -163,6 +189,14 @@ func New(options Options) (*Agent, error) {
 	if enforcementBackend == nil && !options.Production {
 		enforcementBackend = &enforcement.MemoryBackend{}
 	}
+	gatewayBackend := options.GatewayBackend
+	if gatewayBackend == nil {
+		if options.Production {
+			gatewayBackend, _ = gateway.NewPlatformBackend()
+		} else {
+			gatewayBackend = &gateway.MemoryBackend{}
+		}
+	}
 	return &Agent{
 		config:             cfg,
 		logger:             logger,
@@ -173,6 +207,11 @@ func New(options Options) (*Agent, error) {
 		candidateChecker:   options.CandidateChecker,
 		handshakeChecker:   options.HandshakeChecker,
 		preflight:          preflight,
+		onConnect:          options.OnConnect,
+		activateNetwork:    options.ActivateNetwork,
+		initialShares:      append([]publications.Entry(nil), options.InitialShares...),
+		gatewayBackend:     gatewayBackend,
+		gatewayAllowed:     options.GatewayAllowed,
 		enforcementBackend: enforcementBackend,
 		production:         options.Production,
 		interfaceName:      interfaceName,
@@ -321,6 +360,9 @@ func (a *Agent) Run(ctx context.Context) error {
 		Identity: a.profileID,
 		Address:  a.config.HubAddress,
 		Name:     "hub-net",
+		NetworkOptions: network.Options{
+			AgentSocket: a.config.AgentSocketPath,
+		},
 		OnConnect: func(sender *channelgo.Sender) {
 			if a.registrar == nil {
 				return
@@ -336,6 +378,15 @@ func (a *Agent) Run(ctx context.Context) error {
 				a.logger.Error("wireguard interface setup failed", slog.String("err", err.Error()))
 				return
 			}
+			if a.activateNetwork != nil {
+				if err := a.activateNetwork(); err != nil {
+					_ = a.stopInterface()
+					a.resolver.Deactivate()
+					a.profile.SetState(profile.StateUnregistered)
+					a.logger.Error("network translation setup failed", slog.String("err", err.Error()))
+					return
+				}
+			}
 			if a.production {
 				if err := a.dnsServer.Install(runCtx); err != nil {
 					_ = a.stopInterface()
@@ -346,10 +397,20 @@ func (a *Agent) Run(ctx context.Context) error {
 				}
 			}
 			a.resolver.Activate()
+			if err := a.restoreGateway(runCtx, sender); err != nil {
+				a.logger.Error("gateway restore failed", slog.String("err", err.Error()))
+			}
+			if a.onConnect != nil {
+				a.onConnect(runCtx, sender)
+			}
 		},
 	})
 	if err != nil {
 		return fmt.Errorf("hubnet: build hub service: %w", err)
+	}
+	for _, share := range a.initialShares {
+		svc.Share(share.Name, network.Protocol(share.Protocol), share.Host, share.Port,
+			&network.Policy{Mode: network.PolicyHub})
 	}
 	controller, err := control.New(control.Options{
 		Profile: a.profile,
@@ -362,8 +423,22 @@ func (a *Agent) Run(ctx context.Context) error {
 		return fmt.Errorf("hubnet: register control API: %w", err)
 	}
 	a.control = controller
+	a.mu.Lock()
 	a.hubService = svc
+	a.mu.Unlock()
+	defer func() {
+		a.mu.Lock()
+		if a.hubService == svc {
+			a.hubService = nil
+		}
+		a.mu.Unlock()
+	}()
 	defer svc.Stop()
+	defer func() {
+		if err := a.disableGateway(context.Background(), false); err != nil {
+			a.logger.Error("gateway teardown failed", slog.String("err", err.Error()))
+		}
+	}()
 	defer func() {
 		if err := a.stopInterface(); err != nil {
 			a.logger.Error("wireguard interface teardown failed", slog.String("err", err.Error()))
@@ -383,19 +458,19 @@ func (a *Agent) Run(ctx context.Context) error {
 			a.logger.Error("dns resolver teardown failed", slog.String("err", err.Error()))
 		}
 	}()
-	if err := svc.Start(); err != nil {
-		return fmt.Errorf("hubnet: start hub service: %w", err)
-	}
-
-	// HN-302: bring up the local IPC server so services on this machine can
-	// request share attestations. The server fails closed: if it cannot bind
-	// the socket, the agent returns an error rather than advertising a
-	// profile without a working publication path.
+	// Bring up machine-local IPC before opening the Hub connection. hub-pro
+	// challenges this socket while processing network/agent/register, so
+	// starting Hub first creates a reconnect-sensitive registration race.
 	ipcCtx, ipcCancel := context.WithCancel(runCtx)
 	a.mu.Lock()
 	a.ipcCancel = ipcCancel
 	a.mu.Unlock()
 	ipcErrs := a.ipcServer.Start(ipcCtx)
+	if err := svc.Start(); err != nil {
+		ipcCancel()
+		<-ipcErrs
+		return fmt.Errorf("hubnet: start hub service: %w", err)
+	}
 	select {
 	case <-runCtx.Done():
 		ipcCancel()
@@ -411,6 +486,122 @@ func (a *Agent) Run(ctx context.Context) error {
 	ipcCancel()
 	<-ipcErrs
 	return runCtx.Err()
+}
+
+// OpenShare publishes one daemon-owned loopback share.
+func (a *Agent) OpenShare(ctx context.Context, entry publications.Entry) error {
+	a.mu.Lock()
+	service := a.hubService
+	a.mu.Unlock()
+	if service == nil {
+		return errors.New("hubnet: Hub session not connected")
+	}
+	_, err := service.PublishShare(ctx, entry.Name, network.Protocol(entry.Protocol),
+		entry.Host, entry.Port, &network.Policy{Mode: network.PolicyHub})
+	return err
+}
+
+// CloseShare removes one daemon-owned share. Missing desired state is idempotent.
+func (a *Agent) CloseShare(ctx context.Context, name string) error {
+	a.mu.Lock()
+	service := a.hubService
+	a.mu.Unlock()
+	if service == nil {
+		return errors.New("hubnet: Hub session not connected")
+	}
+	if _, found := service.Network().DeclaredShare(name); !found {
+		return nil
+	}
+	_, err := service.RemoveShare(ctx, name)
+	return err
+}
+
+// EnableGateway starts contained forwarding/NAT before publishing capability.
+func (a *Agent) EnableGateway(ctx context.Context) error {
+	a.mu.Lock()
+	a.gatewayAllowed = true
+	service := a.hubService
+	a.mu.Unlock()
+	if service == nil || service.Sender() == nil {
+		return nil
+	}
+	if err := a.restoreGateway(ctx, service.Sender()); err != nil {
+		a.mu.Lock()
+		a.gatewayAllowed = false
+		a.mu.Unlock()
+		return err
+	}
+	return nil
+}
+
+// DisableGateway removes Hub advertisement first, then tears down firewall,
+// NAT, forwarding, and tracked flows.
+func (a *Agent) DisableGateway(ctx context.Context) error {
+	a.mu.Lock()
+	a.gatewayAllowed = false
+	a.mu.Unlock()
+	return a.disableGateway(ctx, true)
+}
+
+func (a *Agent) restoreGateway(ctx context.Context, sender *channelgo.Sender) error {
+	a.mu.Lock()
+	if !a.gatewayAllowed || a.gatewayActive {
+		a.mu.Unlock()
+		return nil
+	}
+	backend := a.gatewayBackend
+	interfaceName := a.interfaceName
+	a.mu.Unlock()
+	if backend == nil {
+		return gateway.ErrPlatformUnsupported
+	}
+	if err := backend.Enable(gateway.DefaultConfig(interfaceName)); err != nil {
+		return err
+	}
+	hostname, err := os.Hostname()
+	if err != nil || hostname == "" {
+		_ = backend.Disable()
+		return errors.New("gateway: hostname unavailable")
+	}
+	capability := protocol.GatewayCapability{
+		Version: 1, Capability: "internet-gateway-v1",
+		IPv4: true, IPv6: true, DNS: true,
+		UpdatedAt: time.Now().UTC().Format(time.RFC3339),
+	}
+	if _, err := sender.Send("network/gateway/advertise", map[string]any{
+		"capability": capability,
+		"endpoint":   fmt.Sprintf("%s:%d", hostname, wireguard.DefaultPort),
+	}); err != nil {
+		_ = backend.Disable()
+		return err
+	}
+	a.mu.Lock()
+	a.gatewayActive = true
+	a.mu.Unlock()
+	_ = ctx
+	return nil
+}
+
+func (a *Agent) disableGateway(ctx context.Context, advertise bool) error {
+	a.mu.Lock()
+	active := a.gatewayActive
+	backend := a.gatewayBackend
+	service := a.hubService
+	a.gatewayActive = false
+	a.mu.Unlock()
+	if !active {
+		return nil
+	}
+	var result error
+	if advertise && service != nil && service.Sender() != nil {
+		_, err := service.Sender().Send("network/gateway/remove", map[string]string{"reason": "provider_disabled"})
+		result = errors.Join(result, err)
+	}
+	if backend != nil {
+		result = errors.Join(result, backend.Disable())
+	}
+	_ = ctx
+	return result
 }
 
 // configureInterface applies the Hub-assigned overlay address only after a

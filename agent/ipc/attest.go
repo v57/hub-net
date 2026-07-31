@@ -24,7 +24,9 @@ import (
 	"errors"
 	"fmt"
 	"net/netip"
+	"sort"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -311,6 +313,52 @@ func (h *AttestHandler) Status(req StatusRequest) (StatusResponse, error) {
 		ServerTime: now,
 		Reason:     fmt.Sprintf("%d pending challenges", pending),
 	}, nil
+}
+
+// BindingProof proves to hub-pro that this exact authenticated agent is
+// reachable through machine-local IPC and supports invitation bootstrap.
+func (h *AttestHandler) BindingProof(req BindingProofRequest) (BindingProofResponse, error) {
+	if req.Version != protocol.WireVersion || req.Type != MessageBindingProof {
+		return BindingProofResponse{}, errIPC("invalid_request", "invalid binding proof version or type")
+	}
+	if req.ProfileKey == "" || req.ConnectionID == "" || req.Nonce == "" {
+		return BindingProofResponse{}, errIPC("invalid_request", "profileKey, connectionId, and nonce required")
+	}
+	// Current agent uses one persistent Hub identity as both authenticated
+	// agent key and profile key. Reject caller-selected substitution.
+	if req.ProfileKey != h.agentKey {
+		return BindingProofResponse{}, errIPC("forbidden", "profileKey does not match local agent identity")
+	}
+	now := h.now().UTC()
+	unsigned := BindingProofResponse{
+		Version:      protocol.WireVersion,
+		Type:         MessageBindingProof,
+		AgentKey:     h.agentKey,
+		ProfileKey:   req.ProfileKey,
+		ConnectionID: req.ConnectionID,
+		Nonce:        req.Nonce,
+		Capabilities: []string{BootstrapCapability},
+		IssuedAt:     now.Format(time.RFC3339Nano),
+		ExpiresAt:    now.Add(LocalBindingProofTTL).Format(time.RFC3339Nano),
+	}
+	unsigned.Signature = h.agent.Sign([]byte(bindingProofInput(unsigned)))
+	return unsigned, nil
+}
+
+func bindingProofInput(proof BindingProofResponse) string {
+	capabilities := append([]string(nil), proof.Capabilities...)
+	sort.Strings(capabilities)
+	return strings.Join([]string{
+		LocalBindingProofDomain,
+		strconv.Itoa(proof.Version),
+		proof.AgentKey,
+		proof.ProfileKey,
+		proof.ConnectionID,
+		proof.Nonce,
+		strings.Join(capabilities, ","),
+		proof.IssuedAt,
+		proof.ExpiresAt,
+	}, "\n")
 }
 
 // pruneLocked drops expired challenges. Caller holds h.mu.

@@ -30,6 +30,13 @@ const (
 	MessageAttestRequest  MessageType = "attest"
 	MessageStatusRequest  MessageType = "status"
 	MessageAttestResponse MessageType = "attestation"
+	MessageBindingProof   MessageType = "binding-proof"
+)
+
+const (
+	LocalBindingProofDomain = "hub-network/local-agent-binding/v1"
+	BootstrapCapability     = "invitation-bootstrap-v1"
+	LocalBindingProofTTL    = 30 * time.Second
 )
 
 // ChallengeRequest asks the agent for a nonce. ShareName, Protocol, and
@@ -47,12 +54,12 @@ type ChallengeRequest struct {
 
 // ChallengeResponse carries the nonce to sign.
 type ChallengeResponse struct {
-	Version   int       `json:"version"`
+	Version   int         `json:"version"`
 	Type      MessageType `json:"type"`
-	Nonce     string    `json:"nonce"`
-	AgentKey  string    `json:"agentKey"`
-	IssuedAt  time.Time `json:"issuedAt"`
-	ExpiresAt time.Time `json:"expiresAt"`
+	Nonce     string      `json:"nonce"`
+	AgentKey  string      `json:"agentKey"`
+	IssuedAt  time.Time   `json:"issuedAt"`
+	ExpiresAt time.Time   `json:"expiresAt"`
 }
 
 // AttestRequest is the signed challenge plus the requested local target.
@@ -76,7 +83,7 @@ type AttestResponse struct {
 
 // StatusRequest queries agent health.
 type StatusRequest struct {
-	Version int        `json:"version"`
+	Version int         `json:"version"`
 	Type    MessageType `json:"type"`
 }
 
@@ -86,16 +93,41 @@ type Handler interface {
 	Challenge(req ChallengeRequest) (ChallengeResponse, error)
 	Attest(req AttestRequest) (AttestResponse, error)
 	Status(req StatusRequest) (StatusResponse, error)
+	BindingProof(req BindingProofRequest) (BindingProofResponse, error)
+}
+
+// BindingProofRequest is created by hub-pro over machine-local IPC while it
+// handles network/agent/register. Socket peer credentials prove locality;
+// nonce and signature bind the active Hub connection and profile identity.
+type BindingProofRequest struct {
+	Version      int         `json:"version"`
+	Type         MessageType `json:"type"`
+	ProfileKey   string      `json:"profileKey"`
+	ConnectionID string      `json:"connectionId"`
+	Nonce        string      `json:"nonce"`
+}
+
+type BindingProofResponse struct {
+	Version      int         `json:"version"`
+	Type         MessageType `json:"type"`
+	AgentKey     string      `json:"agentKey"`
+	ProfileKey   string      `json:"profileKey"`
+	ConnectionID string      `json:"connectionId"`
+	Nonce        string      `json:"nonce"`
+	Capabilities []string    `json:"capabilities"`
+	IssuedAt     string      `json:"issuedAt"`
+	ExpiresAt    string      `json:"expiresAt"`
+	Signature    string      `json:"signature"`
 }
 
 // StatusResponse reports agent health for IPC callers.
 type StatusResponse struct {
-	Version    int       `json:"version"`
+	Version    int         `json:"version"`
 	Type       MessageType `json:"type"`
-	AgentKey   string    `json:"agentKey"`
-	Ready      bool      `json:"ready"`
-	Reason     string    `json:"reason,omitempty"`
-	ServerTime time.Time `json:"serverTime"`
+	AgentKey   string      `json:"agentKey"`
+	Ready      bool        `json:"ready"`
+	Reason     string      `json:"reason,omitempty"`
+	ServerTime time.Time   `json:"serverTime"`
 }
 
 // HandlerServer is a thin Handler wrapper for direct in-process dispatch

@@ -103,7 +103,17 @@ ssh ubuntu 'bash -lc "
 
 This builds old/new Linux amd64 archives, validates portable SHA-256 manifests,
 static stripped architecture and size, package file modes, required runtime
-commands, systemd hardening, inactive-service upgrade behavior, and uninstall
-without identity or WireGuard-key loss. It restores the previously installed
-version and service state on exit. Release signing/provenance is not currently
-configured; SHA-256 manifests are the available integrity metadata.
+commands, systemd hardening, inactive-service upgrade/downgrade behavior,
+singleton migration with gateway-off default, and uninstall without identity
+or WireGuard-key loss. It restores the previously installed version and
+service state on exit. See [multi-Hub migration and rollback](../../docs/multi-hub-migration.md)
+for recovery and destructive reset procedures. Release signing/provenance is
+not currently configured; SHA-256 manifests are the available integrity
+metadata.
+
+Run final HN-865 scenario on both provisioned hosts:
+
+```sh
+hub-pro/integration/hn865_release.sh
+sudo hub-pro/integration/hn865_release.sh # Ubuntu
+```
