@@ -140,8 +140,8 @@ func testManager(t *testing.T, now time.Time, handshakeFailures int) (*Manager, 
 	targetWG64 := base64.StdEncoding.EncodeToString(targetWG)
 	connectionGrant := protocol.ConnectionGrant{
 		Version: 1, GrantID: "grant-1", HubKey: hubKey, HubNetworkID: "network-1",
-		CallerProfileKey: "caller-profile", CallerWireGuardKey: localWG64,
-		CallerAddress: "100.96.0.2", TargetAgentKey: "target-agent",
+		CallerKey: "caller-profile", CallerWireGuardKey: localWG64,
+		CallerAddress: "100.96.0.2", TargetKey: "target-agent",
 		TargetWireGuardKey: targetWG64, ResourceID: "resource-1", ProviderID: "provider-1",
 		Protocol: "tcp", DestinationAddress: "100.96.0.3", DestinationPort: 25565,
 		Generation: 7, IssuedAt: now.Add(-time.Second).Format(time.RFC3339Nano),
@@ -153,7 +153,7 @@ func testManager(t *testing.T, now time.Time, handshakeFailures int) (*Manager, 
 	}
 	connectionGrant.Signature = signature
 	verifier, err := grant.NewVerifier(grant.LocalBinding{
-		HubKey: hubKey, HubNetworkID: "network-1", CallerProfileKey: "caller-profile",
+		HubKey: hubKey, HubNetworkID: "network-1", CallerKey: "caller-profile",
 		CallerWireGuardKey: localWG64,
 	}, func(string) (uint64, bool) { return 7, true })
 	if err != nil {
@@ -185,7 +185,7 @@ func testManager(t *testing.T, now time.Time, handshakeFailures int) (*Manager, 
 
 func candidate(id, agent string, priority uint32, now time.Time) protocol.Candidate {
 	return protocol.Candidate{
-		Version: 1, CandidateID: id, SessionID: "session-1", AgentKey: agent,
+		Version: 1, CandidateID: id, SessionID: "session-1", Key: agent,
 		Kind: "host", Transport: "udp", Address: "198.51.100.10", Port: 51820,
 		Priority: priority, ExpiresAt: now.Add(time.Minute).Format(time.RFC3339Nano),
 	}

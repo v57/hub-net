@@ -67,11 +67,11 @@ func TestRotateKeepsProfileIdentity(t *testing.T) {
 	if err := agent.Prepare(context.Background()); err != nil {
 		t.Fatalf("Prepare: %v", err)
 	}
-	identityBefore := agent.profile.Snapshot().ProfileKey
+	identityBefore := agent.profile.Snapshot().Key
 	if err := agent.RotateWireGuardKey(); err != nil {
 		t.Fatalf("RotateWireGuardKey: %v", err)
 	}
-	identityAfter := agent.profile.Snapshot().ProfileKey
+	identityAfter := agent.profile.Snapshot().Key
 	if identityBefore != identityAfter {
 		t.Fatalf("rotation changed profile identity")
 	}

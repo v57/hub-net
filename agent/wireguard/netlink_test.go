@@ -114,8 +114,8 @@ func TestNlmsgReaderNestedRoundTrip(t *testing.T) {
 	// adapter's encode path and decode path stay symmetric.
 	w := newNlmsgWriter(make([]byte, 16))
 
-	deviceNested := w.PutNested(0x07) // WGDEVICE_A_PEERS placeholder id for test
-	peerNested := w.PutNested(0x07)  // WGPEER_A_ALLOWEDIPS placeholder
+	deviceNested := w.PutNested(0x07)   // WGDEVICE_A_PEERS placeholder id for test
+	peerNested := w.PutNested(0x07)     // WGPEER_A_ALLOWEDIPS placeholder
 	w.PutBytes(0x01, []byte("peerkey")) // WGPEER_A_PUBLIC_KEY
 	w.CloseNested(peerNested)
 	w.CloseNested(deviceNested)

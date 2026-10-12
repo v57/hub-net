@@ -33,7 +33,7 @@ type NodeConfig struct {
 
 type ProfileState struct {
 	State          profile.State `json:"state"`
-	ProfileKey     string        `json:"profileKey"`
+	Key            string        `json:"key"`
 	WireGuardKey   string        `json:"wireGuardKey"`
 	RegisteredAt   time.Time     `json:"registeredAt,omitempty"`
 	Generation     uint64        `json:"generation"`
@@ -128,7 +128,7 @@ func (c *Controller) stream(snapshot func() any) channelgo.StreamFunction {
 func (c *Controller) Profile() ProfileState {
 	snapshot := c.profile.Snapshot()
 	return ProfileState{
-		State: snapshot.State, ProfileKey: snapshot.ProfileKey,
+		State: snapshot.State, Key: snapshot.Key,
 		WireGuardKey: base64.StdEncoding.EncodeToString(snapshot.WireGuardPubKey),
 		RegisteredAt: snapshot.RegisteredAt, Generation: snapshot.Generation,
 		OverlayAddress: snapshot.OverlayAddress, HubNetworkID: snapshot.HubNetworkID,

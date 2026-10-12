@@ -27,9 +27,9 @@ func mustRegistrar(t *testing.T) (*Profile, *Registrar) {
 	}
 	prof.SetWireGuardPublicKey(wg)
 	reg, err := NewRegistrar(RegistrarOptions{
-		Profile:  prof,
-		AgentKey: "agent-key-base64",
-		Name:     "hub-net",
+		Profile: prof,
+		Key:     "agent-key-base64",
+		Name:    "hub-net",
 	})
 	if err != nil {
 		t.Fatalf("NewRegistrar: %v", err)
@@ -46,13 +46,7 @@ func TestRegisterBodyShape(t *testing.T) {
 	if body.Version != protocol.WireVersion {
 		t.Fatalf("version = %d, want %d", body.Version, protocol.WireVersion)
 	}
-	snap := prof.Snapshot()
-	if body.ProfileKey != snap.ProfileKey {
-		t.Fatalf("profileKey mismatch")
-	}
-	if body.AgentKey != "agent-key-base64" {
-		t.Fatalf("agentKey = %s", body.AgentKey)
-	}
+	_ = prof.Snapshot()
 	decoded, err := base64.StdEncoding.DecodeString(body.WireGuardKey)
 	if err != nil {
 		t.Fatalf("wireGuardKey not base64: %v", err)
@@ -75,8 +69,8 @@ func TestRegisterRejectsNilSender(t *testing.T) {
 	}
 }
 
-func TestRegistrarRequiresProfileAndAgentKey(t *testing.T) {
-	if _, err := NewRegistrar(RegistrarOptions{AgentKey: "x"}); err == nil {
+func TestRegistrarRequiresProfileAndKey(t *testing.T) {
+	if _, err := NewRegistrar(RegistrarOptions{Key: "x"}); err == nil {
 		t.Fatalf("expected error without profile")
 	}
 	if _, err := NewRegistrar(RegistrarOptions{Profile: &Profile{}}); err == nil {

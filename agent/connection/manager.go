@@ -111,7 +111,7 @@ func (m *Manager) Connect(ctx context.Context, connectionGrant protocol.Connecti
 	usable := make([]protocol.Candidate, 0, len(candidates))
 	now := m.now()
 	for _, candidate := range candidates {
-		if validCandidate(candidate, connectionGrant.TargetAgentKey, now) {
+		if validCandidate(candidate, connectionGrant.TargetKey, now) {
 			usable = append(usable, candidate)
 		}
 	}
@@ -180,9 +180,9 @@ func (m *Manager) Connect(ctx context.Context, connectionGrant protocol.Connecti
 	return fmt.Errorf("%w after %d candidate attempts", ErrDirectFailed, attempts)
 }
 
-func validCandidate(candidate protocol.Candidate, targetAgentKey string, now time.Time) bool {
+func validCandidate(candidate protocol.Candidate, targetKey string, now time.Time) bool {
 	if candidate.Version != protocol.WireVersion || candidate.CandidateID == "" ||
-		candidate.SessionID == "" || candidate.AgentKey != targetAgentKey ||
+		candidate.SessionID == "" || candidate.Key != targetKey ||
 		candidate.Transport != "udp" || candidate.Port == 0 {
 		return false
 	}
@@ -203,6 +203,19 @@ func (m *Manager) Touch(publicKey []byte) bool {
 		m.peers[string(publicKey)] = peer
 	}
 	return ok
+}
+
+func (m *Manager) Remove(publicKey []byte) error {
+	if len(publicKey) == 0 {
+		return errors.New("connection: peer key required")
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if err := m.adapter.RemovePeer(publicKey); err != nil {
+		return fmt.Errorf("connection: remove peer: %w", err)
+	}
+	delete(m.peers, string(publicKey))
+	return nil
 }
 
 func (m *Manager) PruneIdle() error {

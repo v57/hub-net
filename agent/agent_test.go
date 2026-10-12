@@ -126,8 +126,8 @@ func TestPrepareIsIdempotentAcrossInstances(t *testing.T) {
 	}
 	secondSnap := second.profile.Snapshot()
 
-	if firstSnap.ProfileKey != secondSnap.ProfileKey {
-		t.Fatalf("profile identity not persistent: %s != %s", firstSnap.ProfileKey, secondSnap.ProfileKey)
+	if firstSnap.Key != secondSnap.Key {
+		t.Fatalf("profile identity not persistent: %s != %s", firstSnap.Key, secondSnap.Key)
 	}
 	if firstSnap.WireGuardPubKey == nil || string(firstSnap.WireGuardPubKey) != string(secondSnap.WireGuardPubKey) {
 		t.Fatalf("wireguard public key not persistent")

@@ -57,7 +57,7 @@ type ChallengeResponse struct {
 	Version   int         `json:"version"`
 	Type      MessageType `json:"type"`
 	Nonce     string      `json:"nonce"`
-	AgentKey  string      `json:"agentKey"`
+	Key       string      `json:"key"`
 	IssuedAt  time.Time   `json:"issuedAt"`
 	ExpiresAt time.Time   `json:"expiresAt"`
 }
@@ -97,12 +97,12 @@ type Handler interface {
 }
 
 // BindingProofRequest is created by hub-pro over machine-local IPC while it
-// handles network/agent/register. Socket peer credentials prove locality;
+// handles hub/net/bind. Socket peer credentials prove locality;
 // nonce and signature bind the active Hub connection and profile identity.
 type BindingProofRequest struct {
 	Version      int         `json:"version"`
 	Type         MessageType `json:"type"`
-	ProfileKey   string      `json:"profileKey"`
+	Key          string      `json:"key"`
 	ConnectionID string      `json:"connectionId"`
 	Nonce        string      `json:"nonce"`
 }
@@ -110,8 +110,7 @@ type BindingProofRequest struct {
 type BindingProofResponse struct {
 	Version      int         `json:"version"`
 	Type         MessageType `json:"type"`
-	AgentKey     string      `json:"agentKey"`
-	ProfileKey   string      `json:"profileKey"`
+	Key          string      `json:"key"`
 	ConnectionID string      `json:"connectionId"`
 	Nonce        string      `json:"nonce"`
 	Capabilities []string    `json:"capabilities"`
@@ -124,7 +123,7 @@ type BindingProofResponse struct {
 type StatusResponse struct {
 	Version    int         `json:"version"`
 	Type       MessageType `json:"type"`
-	AgentKey   string      `json:"agentKey"`
+	Key        string      `json:"key"`
 	Ready      bool        `json:"ready"`
 	Reason     string      `json:"reason,omitempty"`
 	ServerTime time.Time   `json:"serverTime"`

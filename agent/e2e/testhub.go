@@ -11,7 +11,7 @@ package e2e
 //
 // The double implements only what the agent needs from hub-pro for HN-310:
 //
-//   - network/agent/register: allocate a stable overlay address pair and echo
+//   - hub/net/bind: allocate a stable overlay address pair and echo
 //     the trusted Hub signing key + network id so the agent can build a
 //     grant.LocalBinding without a separate trust channel.
 //   - network/shares/replace: re-verify each AgentAttestation signature under
@@ -59,18 +59,17 @@ type TestHub struct {
 	ch         *channelgo.Channel
 
 	nextV4    uint32
-	profiles  map[string]*hubProfile  // keyed by agentKey
+	profiles  map[string]*hubProfile  // keyed by key
 	providers map[string]*hubProvider // keyed by resourceID
 	resGen    map[string]uint64       // keyed by resourceID
-	rpcAccess map[string]bool         // keyed by caller agentKey
-	netAccess map[string]bool         // keyed by caller agentKey
-	registers map[string]int          // successful registrations by agentKey
+	rpcAccess map[string]bool         // keyed by caller key
+	netAccess map[string]bool         // keyed by caller key
+	registers map[string]int          // successful registrations by key
 	replaces  map[string]int          // successful share replacements by service key
 }
 
 type hubProfile struct {
-	agentKey          string
-	profileKey        string
+	key               string
 	wireGuardKey      string
 	overlayV4         string
 	overlayV6         string
@@ -81,7 +80,7 @@ type hubProfile struct {
 type hubProvider struct {
 	resourceID string
 	providerID string
-	agentKey   string
+	key        string
 	serviceKey string
 	protocol   string
 	overlay    string
@@ -133,7 +132,7 @@ func (h *TestHub) serverOptions() server.Options {
 			if !ok {
 				return map[string]any{}
 			}
-			return map[string]any{"agentKey": pub}
+			return map[string]any{"key": pub}
 		},
 	}
 }
@@ -180,11 +179,11 @@ func (h *TestHub) Restart() error {
 	return nil
 }
 
-// RegistrationCount reports successful profile registrations for agentKey.
-func (h *TestHub) RegistrationCount(agentKey string) int {
+// RegistrationCount reports successful profile registrations for key.
+func (h *TestHub) RegistrationCount(key string) int {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	return h.registers[agentKey]
+	return h.registers[key]
 }
 
 // ShareReplaceCount reports successful atomic share replacements for a
@@ -208,16 +207,16 @@ func (h *TestHub) Revoke(resourceID string) uint64 {
 // SetRPCAccess and SetNetworkAccess model Hub's independent authorization
 // planes. Missing entries default to allowed so existing agent tests retain
 // their permissive setup.
-func (h *TestHub) SetRPCAccess(agentKey string, allowed bool) {
+func (h *TestHub) SetRPCAccess(key string, allowed bool) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	h.rpcAccess[agentKey] = allowed
+	h.rpcAccess[key] = allowed
 }
 
-func (h *TestHub) SetNetworkAccess(agentKey string, allowed bool) {
+func (h *TestHub) SetNetworkAccess(key string, allowed bool) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	h.netAccess[agentKey] = allowed
+	h.netAccess[key] = allowed
 }
 
 func (h *TestHub) registerHandlers() {
@@ -227,7 +226,7 @@ func (h *TestHub) registerHandlers() {
 	h.ch.Post("hub/profile/update", func(body channelgo.Body) (any, error) {
 		return "ok", nil
 	})
-	h.ch.Post("network/agent/register", func(body channelgo.Body) (any, error) {
+	h.ch.Post("hub/net/bind", func(body channelgo.Body) (any, error) {
 		return h.handleAgentRegister(body)
 	})
 	h.ch.Post("network/shares/replace", func(body channelgo.Body) (any, error) {
@@ -238,7 +237,7 @@ func (h *TestHub) registerHandlers() {
 	})
 	h.ch.Post("s3/read", func(body channelgo.Body) (any, error) {
 		stateMap, _ := body.State.(map[string]any)
-		callerKey, _ := stateMap["agentKey"].(string)
+		callerKey, _ := stateMap["key"].(string)
 		h.mu.Lock()
 		allowed, configured := h.rpcAccess[callerKey]
 		h.mu.Unlock()
@@ -254,40 +253,38 @@ func (h *TestHub) handleAgentRegister(body channelgo.Body) (any, error) {
 	if bodyMap == nil {
 		return nil, fmt.Errorf("testhub: invalid register body")
 	}
-	agentKey, _ := bodyMap["agentKey"].(string)
-	profileKey, _ := bodyMap["profileKey"].(string)
+	stateMap, _ := body.State.(map[string]any)
+	key, _ := stateMap["key"].(string)
 	wireGuardKey, _ := bodyMap["wireGuardKey"].(string)
-	if agentKey == "" || profileKey == "" || wireGuardKey == "" {
-		return nil, fmt.Errorf("testhub: register requires agentKey, profileKey, wireGuardKey")
+	if key == "" || wireGuardKey == "" {
+		return nil, fmt.Errorf("testhub: register requires authenticated key and wireGuardKey")
 	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	prof := h.profiles[agentKey]
+	prof := h.profiles[key]
 	if prof == nil {
 		v4, v6 := h.allocateOverlayLocked()
 		prof = &hubProfile{
-			agentKey:        agentKey,
-			profileKey:      profileKey,
+			key:             key,
 			wireGuardKey:    wireGuardKey,
 			overlayV4:       v4,
 			overlayV6:       v6,
-			ownerServiceKey: agentKey,
+			ownerServiceKey: key,
 		}
-		h.profiles[agentKey] = prof
+		h.profiles[key] = prof
 	} else {
 		// Reconnect: keep the stable overlay, refresh mutable fields.
-		prof.profileKey = profileKey
+		prof.key = key
 		prof.wireGuardKey = wireGuardKey
 	}
-	h.registers[agentKey]++
+	h.registers[key]++
 	// The attestation signer is the agent's SPKI-decoded Ed25519 key, decoded
 	// lazily at share-replace time. Stored as base64 here.
 	return map[string]any{
 		"success": true,
 		"profile": map[string]any{
 			"version":          protocol.WireVersion,
-			"profileKey":       profileKey,
-			"agentKey":         agentKey,
+			"key":              key,
 			"wireGuardKey":     wireGuardKey,
 			"overlayAddresses": []string{prof.overlayV4, prof.overlayV6},
 			"connectedAt":      time.Now().UTC().Format(time.RFC3339Nano),
@@ -304,7 +301,7 @@ func (h *TestHub) handleSharesReplace(body channelgo.Body) (any, error) {
 	}
 	sharesRaw, _ := bodyMap["shares"].([]any)
 	stateMap, _ := body.State.(map[string]any)
-	serviceKey, _ := stateMap["agentKey"].(string)
+	serviceKey, _ := stateMap["key"].(string)
 	if serviceKey == "" {
 		return nil, fmt.Errorf("testhub: shares replace requires authenticated agent")
 	}
@@ -325,9 +322,9 @@ func (h *TestHub) handleSharesReplace(body channelgo.Body) (any, error) {
 		if att.ServiceKey != serviceKey {
 			return nil, fmt.Errorf("testhub: attestation serviceKey %s != connection %s", att.ServiceKey, serviceKey)
 		}
-		prof := h.profileLocked(att.AgentKey)
+		prof := h.profileLocked(att.Key)
 		if prof == nil {
-			return nil, fmt.Errorf("testhub: attesting agent %s not registered", att.AgentKey)
+			return nil, fmt.Errorf("testhub: attesting agent %s not registered", att.Key)
 		}
 		if err := verifyAgentAttestation(att, prof); err != nil {
 			return nil, fmt.Errorf("testhub: verify attestation: %w", err)
@@ -342,11 +339,11 @@ func (h *TestHub) handleSharesReplace(body channelgo.Body) (any, error) {
 			}
 		}
 		resourceID := resourceIDFor(serviceKey, name)
-		providerID := providerIDFor(prof.agentKey, resourceID)
+		providerID := providerIDFor(prof.key, resourceID)
 		h.providers[resourceID] = &hubProvider{
 			resourceID: resourceID,
 			providerID: providerID,
-			agentKey:   prof.agentKey,
+			key:        prof.key,
 			serviceKey: serviceKey,
 			protocol:   proto,
 			overlay:    prof.overlayV4,
@@ -374,30 +371,29 @@ func (h *TestHub) handleConnectionGrant(body channelgo.Body) (any, error) {
 	if bodyMap == nil {
 		return nil, fmt.Errorf("testhub: invalid grant body")
 	}
-	callerProfileKey, _ := bodyMap["callerProfileKey"].(string)
 	callerWireGuardKey, _ := bodyMap["callerWireGuardKey"].(string)
 	resourceID, _ := bodyMap["resourceId"].(string)
-	if callerProfileKey == "" || callerWireGuardKey == "" || resourceID == "" {
-		return nil, fmt.Errorf("testhub: grant requires callerProfileKey, callerWireGuardKey, resourceId")
+	if callerWireGuardKey == "" || resourceID == "" {
+		return nil, fmt.Errorf("testhub: grant requires callerWireGuardKey and resourceId")
 	}
 	stateMap, _ := body.State.(map[string]any)
-	callerAgentKey, _ := stateMap["agentKey"].(string)
+	callerKey, _ := stateMap["key"].(string)
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	if allowed, configured := h.netAccess[callerAgentKey]; configured && !allowed {
+	if allowed, configured := h.netAccess[callerKey]; configured && !allowed {
 		return nil, fmt.Errorf("testhub: network permission denied")
 	}
-	caller := h.profileLocked(callerAgentKey)
-	if caller == nil || caller.profileKey != callerProfileKey || caller.wireGuardKey != callerWireGuardKey {
+	caller := h.profileLocked(callerKey)
+	if caller == nil || caller.key != callerKey || caller.wireGuardKey != callerWireGuardKey {
 		return nil, fmt.Errorf("testhub: caller profile not registered or mismatched")
 	}
 	provider := h.providers[resourceID]
 	if provider == nil {
 		return nil, fmt.Errorf("testhub: no provider for resource %s", resourceID)
 	}
-	target := h.profileLocked(provider.agentKey)
+	target := h.profileLocked(provider.key)
 	if target == nil {
-		return nil, fmt.Errorf("testhub: provider agent %s not connected", provider.agentKey)
+		return nil, fmt.Errorf("testhub: provider agent %s not connected", provider.key)
 	}
 	destinationIsV6 := strings.Contains(provider.overlay, ":")
 	callerAddress := caller.overlayV4
@@ -407,13 +403,13 @@ func (h *TestHub) handleConnectionGrant(body channelgo.Body) (any, error) {
 	now := time.Now().UTC()
 	grant := protocol.ConnectionGrant{
 		Version:            protocol.WireVersion,
-		GrantID:            "grant-" + resourceID + "-" + callerAgentKey,
+		GrantID:            "grant-" + resourceID + "-" + callerKey,
 		HubKey:             h.hubKey,
 		HubNetworkID:       HubNetworkIDAgent,
-		CallerProfileKey:   callerProfileKey,
+		CallerKey:          callerKey,
 		CallerWireGuardKey: callerWireGuardKey,
 		CallerAddress:      callerAddress,
-		TargetAgentKey:     target.agentKey,
+		TargetKey:          target.key,
 		TargetWireGuardKey: target.wireGuardKey,
 		ResourceID:         resourceID,
 		ProviderID:         provider.providerID,
@@ -450,8 +446,8 @@ func (h *TestHub) allocateOverlayLocked() (string, string) {
 	return v4, v6
 }
 
-func (h *TestHub) profileLocked(agentKey string) *hubProfile {
-	return h.profiles[agentKey]
+func (h *TestHub) profileLocked(key string) *hubProfile {
+	return h.profiles[key]
 }
 
 func (h *TestHub) clearOwnerProvidersLocked(ownerKey string) {
@@ -523,19 +519,19 @@ func verifyAgentAttestation(att protocol.AgentAttestation, prof *hubProfile) err
 	return nil
 }
 
-func resourceIDFor(profileKey, shareName string) string {
+func resourceIDFor(key, shareName string) string {
 	// Mirror hub-pro's stable resourceId derivation (owner key + share name).
 	// The exact hash is hub-pro's concern; the harness needs only stability.
-	return "hnr-" + shortHash(profileKey) + "-" + shareName
+	return "hnr-" + shortHash(key) + "-" + shareName
 }
 
-func providerIDFor(agentKey, resourceID string) string {
-	return "prov-" + shortHash(agentKey) + "-" + resourceID
+func providerIDFor(key, resourceID string) string {
+	return "prov-" + shortHash(key) + "-" + resourceID
 }
 
 func shortHash(value string) string {
 	// Deterministic short identifier; collisions within a single test run are
-	// not a concern because profileKey/agentKey are unique per agent.
+	// not a concern because key/key are unique per agent.
 	if len(value) > 8 {
 		return value[len(value)-8:]
 	}

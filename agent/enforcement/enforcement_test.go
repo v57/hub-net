@@ -180,6 +180,60 @@ func TestBackendFailureRollsBackManagerState(t *testing.T) {
 	}
 }
 
+func TestReplaceManualScopesPortsToOneServiceKey(t *testing.T) {
+	backend := &MemoryBackend{}
+	manager, _ := New(backend)
+	if err := manager.ReplaceManual(
+		"service-a", []string{"100.96.0.10", "fd48:5542:4e45::10"},
+		[]string{"100.96.0.2", "fd48:5542:4e45::2"},
+		ManualPorts{TCP: []uint16{1997}, UDP: []uint16{53}},
+	); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	if !backend.Allowed("tcp", netip.MustParseAddr("100.96.0.10"), netip.MustParseAddr("100.96.0.2"), 1997, now) {
+		t.Fatal("manual TCP grant denied")
+	}
+	if backend.Allowed("tcp", netip.MustParseAddr("100.96.0.11"), netip.MustParseAddr("100.96.0.2"), 1997, now) {
+		t.Fatal("another user inherited manual grant")
+	}
+	if backend.Allowed("tcp", netip.MustParseAddr("100.96.0.10"), netip.MustParseAddr("100.96.0.2"), 53, now) {
+		t.Fatal("TCP allowed for UDP-only port")
+	}
+	if !backend.Allowed("udp", netip.MustParseAddr("fd48:5542:4e45::10"), netip.MustParseAddr("fd48:5542:4e45::2"), 53, now) {
+		t.Fatal("manual IPv6 UDP grant denied")
+	}
+	if err := manager.ReplaceManual(
+		"service-a", []string{"100.96.0.10"}, []string{"100.96.0.2"}, ManualPorts{},
+	); err != nil {
+		t.Fatal(err)
+	}
+	if len(manager.Rules()) != 0 {
+		t.Fatal("removed manual ports retained")
+	}
+	terminated := backend.Terminated()
+	if !slices.Contains(terminated, "manual:service-a:tcp:1997") ||
+		!slices.Contains(terminated, "manual:service-a:udp:53") {
+		t.Fatalf("removed flows not terminated: %v", terminated)
+	}
+}
+
+func TestReplaceManualBackendFailureRollsBack(t *testing.T) {
+	backend := &failingBackend{}
+	manager, _ := New(backend)
+	if err := manager.ReplaceManual("service-a", []string{"100.96.0.10"}, []string{"100.96.0.2"}, ManualPorts{TCP: []uint16{80}}); err != nil {
+		t.Fatal(err)
+	}
+	before := manager.Rules()
+	backend.fail = true
+	if err := manager.ReplaceManual("service-a", []string{"100.96.0.10"}, []string{"100.96.0.2"}, ManualPorts{TCP: []uint16{443}}); err == nil {
+		t.Fatal("backend failure accepted")
+	}
+	if got := manager.Rules(); !slices.Equal(got, before) {
+		t.Fatalf("rules changed after failure: %v", got)
+	}
+}
+
 type failingBackend struct {
 	MemoryBackend
 	fail bool

@@ -32,7 +32,7 @@ const (
 type Profile struct {
 	mu              sync.RWMutex
 	state           State
-	profileKey      string // base64 SPKI of the Hub profile identity
+	key             string // base64 SPKI of the Hub profile identity
 	wireGuardPubKey []byte // raw 32-byte Curve25519 public key
 	registeredAt    time.Time
 	generation      uint64
@@ -51,8 +51,8 @@ func New(profileIdentity *identity.Identity) (*Profile, error) {
 		return nil, err
 	}
 	return &Profile{
-		state:      StateUnregistered,
-		profileKey: pub,
+		state: StateUnregistered,
+		key:   pub,
 	}, nil
 }
 
@@ -75,11 +75,11 @@ func (p *Profile) WireGuardPublicKey() []byte {
 	return cp
 }
 
-// ProfileKey returns the base64 SPKI Hub identity public key.
-func (p *Profile) ProfileKey() string {
+// Key returns the base64 SPKI Hub identity public key.
+func (p *Profile) Key() string {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
-	return p.profileKey
+	return p.key
 }
 
 // State returns the current lifecycle state.
@@ -169,7 +169,7 @@ func (p *Profile) RotateWireGuardPublicKey(newPublic []byte) {
 // Snapshot is an immutable view of the profile at a point in time.
 type Snapshot struct {
 	State           State
-	ProfileKey      string
+	Key             string
 	WireGuardPubKey []byte
 	RegisteredAt    time.Time
 	Generation      uint64
@@ -186,7 +186,7 @@ func (p *Profile) Snapshot() Snapshot {
 	copy(wg, p.wireGuardPubKey)
 	return Snapshot{
 		State:           p.state,
-		ProfileKey:      p.profileKey,
+		Key:             p.key,
 		WireGuardPubKey: wg,
 		RegisteredAt:    p.registeredAt,
 		Generation:      p.generation,

@@ -25,24 +25,24 @@ func TestBindingProofBindsLocalAgentProfileConnectionAndCapability(t *testing.T)
 	if err != nil {
 		t.Fatalf("NewAttestHandler: %v", err)
 	}
-	agentKey, _ := agent.PublicKeyBase64()
+	key, _ := agent.PublicKeyBase64()
 	proof, err := handler.BindingProof(BindingProofRequest{
 		Version:      protocol.WireVersion,
 		Type:         MessageBindingProof,
-		ProfileKey:   agentKey,
+		Key:          key,
 		ConnectionID: "connection-1",
 		Nonce:        "hub-pro-nonce",
 	})
 	if err != nil {
 		t.Fatalf("BindingProof: %v", err)
 	}
-	if proof.AgentKey != agentKey || proof.ProfileKey != agentKey || proof.ConnectionID != "connection-1" {
+	if proof.Key != key || proof.ConnectionID != "connection-1" {
 		t.Fatalf("binding mismatch: %+v", proof)
 	}
 	if len(proof.Capabilities) != 1 || proof.Capabilities[0] != BootstrapCapability {
 		t.Fatalf("capabilities = %v", proof.Capabilities)
 	}
-	der, _ := base64.StdEncoding.DecodeString(agentKey)
+	der, _ := base64.StdEncoding.DecodeString(key)
 	parsed, err := x509.ParsePKIXPublicKey(der)
 	if err != nil {
 		t.Fatalf("ParsePKIXPublicKey: %v", err)
@@ -60,7 +60,7 @@ func TestBindingProofRejectsProfileSubstitution(t *testing.T) {
 	_, err := handler.BindingProof(BindingProofRequest{
 		Version:      protocol.WireVersion,
 		Type:         MessageBindingProof,
-		ProfileKey:   "different-profile",
+		Key:          "different-profile",
 		ConnectionID: "connection-1",
 		Nonce:        "hub-pro-nonce",
 	})
@@ -107,11 +107,11 @@ func TestBindingProofUnixSocketEndpoint(t *testing.T) {
 		time.Sleep(time.Millisecond)
 	}
 
-	agentKey, _ := agent.PublicKeyBase64()
+	key, _ := agent.PublicKeyBase64()
 	payload, _ := json.Marshal(BindingProofRequest{
 		Version:      protocol.WireVersion,
 		Type:         MessageBindingProof,
-		ProfileKey:   agentKey,
+		Key:          key,
 		ConnectionID: "connection-1",
 		Nonce:        "hub-pro-nonce",
 	})
@@ -132,7 +132,7 @@ func TestBindingProofUnixSocketEndpoint(t *testing.T) {
 	if err := json.NewDecoder(response.Body).Decode(&proof); err != nil {
 		t.Fatal(err)
 	}
-	if proof.AgentKey != agentKey || proof.Nonce != "hub-pro-nonce" {
+	if proof.Key != key || proof.Nonce != "hub-pro-nonce" {
 		t.Fatalf("unexpected proof: %+v", proof)
 	}
 }

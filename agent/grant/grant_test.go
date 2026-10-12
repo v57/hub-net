@@ -47,7 +47,7 @@ func TestVerifyRejectsMutationsReplayAndStaleGeneration(t *testing.T) {
 	}{
 		{"signature field", func(g *protocol.ConnectionGrant) { g.DestinationPort++ }, ErrInvalidGrant},
 		{"Hub network", func(g *protocol.ConnectionGrant) { g.HubNetworkID = "other" }, ErrBindingMismatch},
-		{"caller profile", func(g *protocol.ConnectionGrant) { g.CallerProfileKey = "other" }, ErrBindingMismatch},
+		{"caller profile", func(g *protocol.ConnectionGrant) { g.CallerKey = "other" }, ErrBindingMismatch},
 		{"caller WireGuard key", func(g *protocol.ConnectionGrant) { g.CallerWireGuardKey = key(7) }, ErrBindingMismatch},
 		{"outside overlay", func(g *protocol.ConnectionGrant) { g.DestinationAddress = "8.8.8.8" }, ErrInvalidGrant},
 		{"target key", func(g *protocol.ConnectionGrant) { g.TargetWireGuardKey = "bad" }, ErrInvalidGrant},
@@ -97,10 +97,10 @@ func fixture(t *testing.T) (*Verifier, protocol.ConnectionGrant) {
 		GrantID:            "grant-1",
 		HubKey:             hubKey,
 		HubNetworkID:       "network-1",
-		CallerProfileKey:   "profile-1",
+		CallerKey:          "profile-1",
 		CallerWireGuardKey: key(1),
 		CallerAddress:      "100.96.0.8",
-		TargetAgentKey:     "agent-2",
+		TargetKey:          "agent-2",
 		TargetWireGuardKey: key(2),
 		ResourceID:         "resource-1",
 		ProviderID:         "provider-1",
@@ -115,7 +115,7 @@ func fixture(t *testing.T) (*Verifier, protocol.ConnectionGrant) {
 	verifier, err := NewVerifier(LocalBinding{
 		HubKey:             hubKey,
 		HubNetworkID:       "network-1",
-		CallerProfileKey:   "profile-1",
+		CallerKey:          "profile-1",
 		CallerWireGuardKey: key(1),
 	}, func(resourceID string) (uint64, bool) {
 		return 4, resourceID == "resource-1"

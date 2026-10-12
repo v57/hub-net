@@ -83,6 +83,13 @@ type Config struct {
 	// DNSListenAddress is the loopback UDP endpoint for reserved-suffix DNS.
 	// Platform packaging directs only hub.invalid queries to this endpoint.
 	DNSListenAddress string `json:"dnsListenAddress,omitempty"`
+	// BootstrapListenAddress is the UDP endpoint the inviter's direct
+	// bootstrap listener binds. Joiners send framed signed requests here after
+	// the node pairs the sessions; the node-observed endpoint recorded from
+	// the invitation probe is this same socket, so the value is discoverable
+	// without a fixed port. Empty defaults to ":0" (all interfaces, ephemeral
+	// port).
+	BootstrapListenAddress string `json:"bootstrapListenAddress,omitempty"`
 	// AttestationTTL is how long issued attestations remain valid. Must stay
 	// short; Hub re-checks on every share registration.
 	AttestationTTL time.Duration `json:"attestationTtl,omitempty"`
@@ -99,15 +106,16 @@ type Config struct {
 func Defaults() Config {
 	stateDir := DefaultStateDir()
 	return Config{
-		HubAddress:       DefaultHubPort,
-		StateDir:         stateDir,
-		IdentityPath:     filepath.Join(stateDir, DefaultIdentityFile),
-		WireGuardKeyPath: filepath.Join(stateDir, DefaultWireGuardKeyFile),
-		AgentSocketPath:  DefaultAgentSocket(),
-		DNSListenAddress: "127.0.0.1:0",
-		AttestationTTL:   2 * time.Minute,
-		PeerIdleTimeout:  5 * time.Minute,
-		HandshakeTimeout: 30 * time.Second,
+		HubAddress:             DefaultHubPort,
+		StateDir:               stateDir,
+		IdentityPath:           filepath.Join(stateDir, DefaultIdentityFile),
+		WireGuardKeyPath:       filepath.Join(stateDir, DefaultWireGuardKeyFile),
+		AgentSocketPath:        DefaultAgentSocket(),
+		DNSListenAddress:       "127.0.0.1:0",
+		BootstrapListenAddress: ":0",
+		AttestationTTL:         2 * time.Minute,
+		PeerIdleTimeout:        5 * time.Minute,
+		HandshakeTimeout:       30 * time.Second,
 	}
 }
 
@@ -132,6 +140,9 @@ func (c *Config) Resolve() error {
 	}
 	if c.DNSListenAddress == "" {
 		c.DNSListenAddress = "127.0.0.1:0"
+	}
+	if c.BootstrapListenAddress == "" {
+		c.BootstrapListenAddress = ":0"
 	}
 	if c.AttestationTTL == 0 {
 		c.AttestationTTL = 2 * time.Minute

@@ -17,6 +17,32 @@ import (
 
 const membershipStoreVersion = 1
 
+// JoinIdentity is the fresh service + WireGuard key pair staged before any
+// remote work so a retried join cannot rotate keys after remote enrollment.
+type JoinIdentity struct {
+	Key          string
+	WireGuardKey string
+}
+
+// Enrollment is the remote membership result recorded durably before any
+// local commit work begins.
+type Enrollment struct {
+	MembershipID string
+	NetworkID    string
+	Addresses    []string
+}
+
+// HubHeader is the display header used to derive the membership alias.
+type HubHeader struct {
+	Name string `json:"name"`
+}
+
+// Membership is one committed local membership.
+type Membership struct {
+	ID    string
+	Alias string
+}
+
 type stagedJoin struct {
 	Version       int          `json:"version"`
 	TransactionID string       `json:"transactionId"`

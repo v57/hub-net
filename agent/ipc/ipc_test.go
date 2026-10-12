@@ -40,8 +40,8 @@ func TestNewHandlerServerWrapsHandler(t *testing.T) {
 func TestHandlerServerDispatch(t *testing.T) {
 	now := time.Date(2026, 7, 25, 0, 0, 0, 0, time.UTC)
 	h := &stubHandler{
-		challenge: ChallengeResponse{Nonce: "n", AgentKey: "ak", IssuedAt: now},
-		status:    StatusResponse{Ready: true, AgentKey: "ak", ServerTime: now},
+		challenge: ChallengeResponse{Nonce: "n", Key: "ak", IssuedAt: now},
+		status:    StatusResponse{Ready: true, Key: "ak", ServerTime: now},
 		err:       nil,
 	}
 	server := NewHandlerServer(h)

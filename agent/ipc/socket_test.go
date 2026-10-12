@@ -157,9 +157,9 @@ func TestE2EFullChallengeAttestFlow(t *testing.T) {
 		t.Fatalf("status = %d", status)
 	}
 
-	agentPub, err := parseSPKIPublicKey(att.AgentKey)
+	agentPub, err := parseSPKIPublicKey(att.Key)
 	if err != nil {
-		t.Fatalf("parse agentKey: %v", err)
+		t.Fatalf("parse key: %v", err)
 	}
 	ok, err := protocol.VerifyEnvelope(protocol.PurposeAgentAttestation, att, agentPub, att.Signature)
 	if err != nil {
@@ -172,7 +172,7 @@ func TestE2EFullChallengeAttestFlow(t *testing.T) {
 		att.Target.Host != "127.0.0.1" || att.Target.Port != 9000 {
 		t.Fatalf("attestation fields mismatch: %+v", att)
 	}
-	if att.AgentKey == "" || att.AttestationID == "" || att.IssuedAt == "" || att.ExpiresAt == "" {
+	if att.Key == "" || att.AttestationID == "" || att.IssuedAt == "" || att.ExpiresAt == "" {
 		t.Fatalf("attestation missing fields: %+v", att)
 	}
 }
@@ -366,8 +366,8 @@ func TestE2EStatusReady(t *testing.T) {
 	if !ready {
 		t.Fatalf("not ready: %+v", resp)
 	}
-	if resp["agentKey"] == nil {
-		t.Fatalf("empty agentKey")
+	if resp["key"] == nil {
+		t.Fatalf("empty key")
 	}
 }
 

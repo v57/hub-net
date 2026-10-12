@@ -15,11 +15,11 @@ func TestFileStoreResumesIdentityAndCommitsAtomically(t *testing.T) {
 		t.Fatal(err)
 	}
 	ctx := context.Background()
-	identity := JoinIdentity{ProfileKey: "profile", AgentKey: "agent", WireGuardKey: "wireguard"}
+	identity := JoinIdentity{Key: "agent", WireGuardKey: "wireguard"}
 	if _, err := store.Stage(ctx, "transaction-1", identity); err != nil {
 		t.Fatal(err)
 	}
-	resumed, err := store.Stage(ctx, "transaction-1", JoinIdentity{AgentKey: "replacement"})
+	resumed, err := store.Stage(ctx, "transaction-1", JoinIdentity{Key: "replacement"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -64,7 +64,7 @@ func TestFileStoreRecoversInterruptedLocalCommitExactlyOnce(t *testing.T) {
 		t.Fatal(err)
 	}
 	ctx := context.Background()
-	identity := JoinIdentity{AgentKey: "stable"}
+	identity := JoinIdentity{Key: "stable"}
 	if _, err := first.Stage(ctx, "transaction-1", identity); err != nil {
 		t.Fatal(err)
 	}
@@ -78,7 +78,7 @@ func TestFileStoreRecoversInterruptedLocalCommitExactlyOnce(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	resumed, err := restarted.Stage(ctx, "transaction-1", JoinIdentity{AgentKey: "wrong"})
+	resumed, err := restarted.Stage(ctx, "transaction-1", JoinIdentity{Key: "wrong"})
 	if err != nil {
 		t.Fatal(err)
 	}

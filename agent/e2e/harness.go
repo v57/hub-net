@@ -81,7 +81,7 @@ type Side struct {
 	WireGuardPriv   []byte
 	WireGuardPubB64 string
 	OverlayAddress  string
-	AgentKey        string
+	Key             string
 
 	Adapter    *wireguard.FakeAdapter
 	Enforce    *enforcement.Manager
@@ -96,11 +96,11 @@ type Side struct {
 
 // Harness is the two-agent local end-to-end fixture.
 type Harness struct {
-	t       *testing.T
-	caller  *Side
+	t        *testing.T
+	caller   *Side
 	provider *Side
-	hubKey  string
-	hubPriv ed25519.PrivateKey
+	hubKey   string
+	hubPriv  ed25519.PrivateKey
 }
 
 // New builds the two-side harness: caller + provider, isolated identities and
@@ -155,10 +155,10 @@ func (h *Harness) IssueGrant(resourceID, protocolName string, port uint16) proto
 		GrantID:            "grant-" + resourceID + "-" + protocolName,
 		HubKey:             h.hubKey,
 		HubNetworkID:       HubNetworkID,
-		CallerProfileKey:   h.caller.AgentKey,
+		CallerKey:          h.caller.Key,
 		CallerWireGuardKey: h.caller.WireGuardPubB64,
 		CallerAddress:      h.caller.OverlayAddress,
-		TargetAgentKey:     h.provider.AgentKey,
+		TargetKey:          h.provider.Key,
 		TargetWireGuardKey: h.provider.WireGuardPubB64,
 		ResourceID:         resourceID,
 		ProviderID:         "provider-" + resourceID,
@@ -184,7 +184,7 @@ func (h *Harness) IssueGrant(resourceID, protocolName string, port uint16) proto
 func (h *Harness) Candidates(now time.Time) []protocol.Candidate {
 	return []protocol.Candidate{{
 		Version: protocol.WireVersion, CandidateID: "cand-direct",
-		SessionID: "session-e2e", AgentKey: h.provider.AgentKey,
+		SessionID: "session-e2e", Key: h.provider.Key,
 		Kind: "host", Transport: "udp", Address: "198.51.100.20", Port: 51820,
 		Priority: 100, ExpiresAt: now.Add(time.Minute).Format(time.RFC3339Nano),
 	}}
@@ -255,7 +255,7 @@ func newSide(t *testing.T, name, overlayAddress string) *Side {
 	return &Side{
 		Name: name, Identity: id, ServiceKey: serviceKey,
 		WireGuardPriv: wgPriv, WireGuardPubB64: wgPubB64,
-		OverlayAddress: overlayAddress, AgentKey: serviceKey,
+		OverlayAddress: overlayAddress, Key: serviceKey,
 		Adapter: adapter, Enforce: manager, Backend: backend,
 		ipcServer: server, ipcErrs: ipcErrs, socket: socketPath,
 	}
@@ -268,7 +268,7 @@ func (s *Side) bindVerifier(hubKey string) {
 	var bindErr error
 	s.Verifier, bindErr = grant.NewVerifier(grant.LocalBinding{
 		HubKey: hubKey, HubNetworkID: HubNetworkID,
-		CallerProfileKey: s.AgentKey, CallerWireGuardKey: s.WireGuardPubB64,
+		CallerKey: s.Key, CallerWireGuardKey: s.WireGuardPubB64,
 	}, func(resourceID string) (uint64, bool) {
 		if resourceID == "" {
 			return 0, false

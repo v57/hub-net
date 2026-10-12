@@ -20,12 +20,16 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/netip"
 	"os"
+	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/v57/channel-go/channelgo"
+	nodeprotocol "github.com/v57/hub-net-node/protocol"
 	"github.com/v57/hub-net/config"
 	"github.com/v57/hub-net/connection"
 	"github.com/v57/hub-net/control"
@@ -33,9 +37,12 @@ import (
 	"github.com/v57/hub-net/enforcement"
 	"github.com/v57/hub-net/gateway"
 	"github.com/v57/hub-net/grant"
+	"github.com/v57/hub-net/invitation"
 	"github.com/v57/hub-net/ipc"
 	"github.com/v57/hub-net/keychain"
 	"github.com/v57/hub-net/logging"
+	"github.com/v57/hub-net/netapi"
+	"github.com/v57/hub-net/nodeclient"
 	"github.com/v57/hub-net/platform"
 	"github.com/v57/hub-net/profile"
 	"github.com/v57/hub-net/publications"
@@ -80,6 +87,7 @@ type Agent struct {
 	enforcementBackend enforcement.Backend
 	production         bool
 	interfaceName      string
+	initialPeers       []wireguard.PeerConfig
 	candidateChecker   connection.CandidateChecker
 	handshakeChecker   connection.HandshakeChecker
 	preflight          func() error
@@ -95,6 +103,17 @@ type Agent struct {
 	// test harness injects values directly.
 	genMu       sync.RWMutex
 	generations map[string]uint64
+	netPorts    *netapi.Store
+	netUsers    *netapi.Registry
+	// nodeClient keeps the online-inviter registration live against
+	// hub-net-node; NodeOnline reports its lease state.
+	nodeClient   *nodeclient.Client
+	nodeEndpoint string
+	// inviter handles signed joiner direct-bootstrap requests once the node
+	// pairs a joiner with this agent; bootstrapListener owns the UDP socket
+	// that accepts the framed requests and sends the node probe.
+	inviter           *invitation.Inviter
+	bootstrapListener *invitation.Listener
 }
 
 // Options configures Agent construction.
@@ -124,6 +143,12 @@ type Options struct {
 	// InterfaceName selects the platform tunnel interface. Empty defaults to
 	// hubnet0. Acceptance environments use distinct names for isolated agents.
 	InterfaceName string
+	// InitialPeers are installed on the WireGuard interface during
+	// configureInterface (after registration). Joined memberships use them to
+	// keep the inviter peer of the temporary bootstrap link, so the hub-pro
+	// control connection through the inviter survives the interface
+	// reconfiguration that replaces the join-time link.
+	InitialPeers []wireguard.PeerConfig
 	// Preflight overrides the production probe in tests.
 	Preflight func() error
 	// OnConnect runs after profile, interface, and DNS activation on every Hub
@@ -215,7 +240,10 @@ func New(options Options) (*Agent, error) {
 		enforcementBackend: enforcementBackend,
 		production:         options.Production,
 		interfaceName:      interfaceName,
+		initialPeers:       append([]wireguard.PeerConfig(nil), options.InitialPeers...),
 		generations:        make(map[string]uint64),
+		netPorts:           netapi.NewStore(filepath.Join(cfg.StateDir, "ports.json")),
+		netUsers:           netapi.NewRegistry(filepath.Join(cfg.StateDir, "revoked-users.json")),
 		dnsServer: &dnsresolver.Server{
 			Resolver:  resolver,
 			Installer: installer,
@@ -292,14 +320,14 @@ func (a *Agent) Prepare(ctx context.Context) error {
 		a.logger.Warn("enforcement backend unsupported on this platform; per-resource authorization unavailable", slog.String("err", err.Error()))
 	}
 
-	agentKey, err := profileID.PublicKeyBase64()
+	key, err := profileID.PublicKeyBase64()
 	if err != nil {
 		return fmt.Errorf("hubnet: read profile public key: %w", err)
 	}
 	registrar, err := profile.NewRegistrar(profile.RegistrarOptions{
-		Profile:  prof,
-		AgentKey: agentKey,
-		Name:     "hub-net",
+		Profile: prof,
+		Key:     key,
+		Name:    "hub-net",
 	})
 	if err != nil {
 		return fmt.Errorf("hubnet: build registrar: %w", err)
@@ -372,6 +400,7 @@ func (a *Agent) Run(ctx context.Context) error {
 				a.logger.Error("profile register failed", slog.String("err", err.Error()))
 				return
 			}
+			go a.watchNetUsers(runCtx, sender)
 			if err := a.configureInterface(); err != nil {
 				a.resolver.Deactivate()
 				a.profile.SetState(profile.StateUnregistered)
@@ -403,6 +432,7 @@ func (a *Agent) Run(ctx context.Context) error {
 			if a.onConnect != nil {
 				a.onConnect(runCtx, sender)
 			}
+			go a.watchNodeEndpoint(runCtx, sender)
 		},
 	})
 	if err != nil {
@@ -421,6 +451,185 @@ func (a *Agent) Run(ctx context.Context) error {
 	}
 	if err := controller.Register(svc); err != nil {
 		return fmt.Errorf("hubnet: register control API: %w", err)
+	}
+	if err := invitation.RegisterInviteService(svc, a.profileID, func() string {
+		endpoints := a.control.NodeConfig().Endpoints
+		if len(endpoints) > 0 {
+			return endpoints[0]
+		}
+		return ""
+	}); err != nil {
+		return fmt.Errorf("hubnet: register invitation API: %w", err)
+	}
+	nodeClient, err := nodeclient.New(nodeclient.Options{
+		Endpoint: a.currentNodeEndpoint,
+		Identity: a.profileID,
+		Logger:   a.logger,
+		// The inviter's bootstrap listener owns one UDP socket: it sends the
+		// invitation probe (so the node-observed endpoint is the listener
+		// address) and accepts framed signed requests from joiners. Declared
+		// candidates mirror the same address for peers that prefer them.
+		Candidates: func() []protocol.Candidate {
+			listener := a.bootstrapListener
+			if listener == nil {
+				return nil
+			}
+			address, ok := listener.Addr().(*net.UDPAddr)
+			if !ok {
+				return nil
+			}
+			return []protocol.Candidate{{
+				CandidateID: "inviter-bootstrap",
+				Kind:        "host",
+				Transport:   "udp",
+				Address:     address.IP.String(),
+				Port:        uint16(address.Port),
+				Priority:    100,
+			}}
+		},
+		Probe: func(ctx context.Context, endpoint string, probe nodeprotocol.InvitationUDPProbe, expectedTicketID string) error {
+			listener := a.bootstrapListener
+			if listener == nil {
+				return errors.New("hubnet: bootstrap listener unavailable")
+			}
+			return listener.Probe(ctx, endpoint, probe, expectedTicketID)
+		},
+		Bootstrap: func(event nodeclient.BootstrapEvent) {
+			a.logger.Info("inviter bootstrap rendezvous",
+				slog.String("joiner", event.JoinerKey),
+				slog.String("transaction", event.TransactionID),
+				slog.String("session", event.SessionID),
+				slog.Int("candidates", len(event.Candidates)),
+				slog.String("observed", event.Observed.Address),
+			)
+		},
+	})
+	if err != nil {
+		a.logger.Warn("node registration client unavailable", slog.String("err", err.Error()))
+	} else {
+		a.nodeClient = nodeClient
+	}
+	wgPublicKey, err := wireGuardPublicKey(a.wgPrivate)
+	if err != nil {
+		a.logger.Warn("inviter wireguard key unavailable", slog.String("err", err.Error()))
+	} else if inviter, err := invitation.NewInviter(invitation.InviterOptions{
+		Identity:     a.profileID,
+		WireGuardKey: wgPublicKey,
+		Adapter:      a.adapter,
+		// The signed response carries the bootstrap listener endpoint so a
+		// joiner can retry a direct exchange without re-reading the paired
+		// session. The WireGuard handshake itself uses the adapter's listen
+		// port on the same address.
+		Endpoints: func() []protocol.BootstrapEndpoint {
+			listener := a.bootstrapListener
+			if listener == nil {
+				return nil
+			}
+			address, ok := listener.Addr().(*net.UDPAddr)
+			if !ok {
+				return nil
+			}
+			port := uint16(wireguard.DefaultPort)
+			if state, up := a.adapter.State(); up && state.ListenPort != 0 {
+				port = state.ListenPort
+			}
+			return []protocol.BootstrapEndpoint{{
+				Address: address.IP.String(), Port: port, Transport: "udp",
+			}}
+		},
+		HubProHost: func() string {
+			if a.netUsers == nil {
+				return ""
+			}
+			key, _ := a.profileID.PublicKeyBase64()
+			for _, value := range a.netUsers.Addresses(key) {
+				if parsed, err := netip.ParseAddr(value); err == nil && parsed.Is4() {
+					return parsed.String()
+				}
+			}
+			return ""
+		},
+	}); err != nil {
+		a.logger.Warn("inviter bootstrap handler unavailable", slog.String("err", err.Error()))
+	} else {
+		a.inviter = inviter
+		defer func() {
+			a.inviter.CloseAll(context.Background())
+		}()
+	}
+	if a.inviter != nil {
+		listener, err := invitation.NewListener(invitation.ListenerOptions{
+			Inviter: a.inviter,
+			Address: a.config.BootstrapListenAddress,
+			Logger:  a.logger,
+		})
+		if err != nil {
+			a.logger.Warn("inviter bootstrap listener unavailable", slog.String("err", err.Error()))
+		} else {
+			a.bootstrapListener = listener
+			defer listener.Close()
+		}
+	}
+	if err := netapi.Register(svc, netapi.Options{
+		Store: a.netPorts, Registry: a.netUsers,
+		AgentID: func() string { key, _ := a.profileID.PublicKeyBase64(); return key },
+		AgentAddresses: func() (string, string) {
+			key, _ := a.profileID.PublicKeyBase64()
+			addresses := a.netUsers.Addresses(key)
+			var v4, v6 string
+			for _, value := range addresses {
+				if parsed, err := netip.ParseAddr(value); err == nil {
+					if parsed.Is4() {
+						v4 = value
+					} else {
+						v6 = value
+					}
+				}
+			}
+			return v4, v6
+		},
+		NodeOnline: func() bool {
+			if a.nodeClient == nil {
+				return false
+			}
+			return a.nodeClient.Online()
+		},
+		VPN: func() bool { a.mu.Lock(); defer a.mu.Unlock(); return a.gatewayActive },
+		PeerUsage: func() []netapi.PeerUsage {
+			if a.connections == nil {
+				return nil
+			}
+			peers := a.connections.Peers()
+			out := make([]netapi.PeerUsage, 0, len(peers))
+			for _, peer := range peers {
+				out = append(out, netapi.PeerUsage{WireGuardKey: base64.StdEncoding.EncodeToString(peer.PublicKey), LastUsed: peer.LastUsed, Online: true})
+			}
+			return out
+		},
+		ApplyFirewall: func(id string, ports netapi.Ports) error {
+			if a.enforcementMgr == nil {
+				return errors.New("hubnet: firewall enforcement unavailable on this platform")
+			}
+			user, ok := a.netUsers.Profile(id)
+			if !ok {
+				return errors.New("unknown user")
+			}
+			key, _ := a.profileID.PublicKeyBase64()
+			destinations := a.netUsers.Addresses(key)
+			return a.enforcementMgr.ReplaceManual(id, user.OverlayAddresses, destinations, enforcement.ManualPorts{TCP: ports.TCP, UDP: ports.UDP})
+		},
+		RevokePeer: func(user protocol.AgentProfile) error {
+			raw, err := base64.StdEncoding.DecodeString(user.WireGuardKey)
+			if err != nil {
+				return err
+			}
+			if a.connections != nil {
+				return a.connections.Remove(raw)
+			}
+			return a.adapter.RemovePeer(raw)
+		},
+	}); err != nil {
+		return fmt.Errorf("hubnet: register network API: %w", err)
 	}
 	a.control = controller
 	a.mu.Lock()
@@ -459,13 +668,41 @@ func (a *Agent) Run(ctx context.Context) error {
 		}
 	}()
 	// Bring up machine-local IPC before opening the Hub connection. hub-pro
-	// challenges this socket while processing network/agent/register, so
+	// challenges this socket while processing hub/net/bind, so
 	// starting Hub first creates a reconnect-sensitive registration race.
 	ipcCtx, ipcCancel := context.WithCancel(runCtx)
 	a.mu.Lock()
 	a.ipcCancel = ipcCancel
 	a.mu.Unlock()
 	ipcErrs := a.ipcServer.Start(ipcCtx)
+	if a.nodeClient != nil {
+		go func() {
+			if err := a.nodeClient.Run(runCtx); err != nil && runCtx.Err() == nil {
+				a.logger.Error("node registration client stopped", slog.String("err", err.Error()))
+			}
+		}()
+	}
+	if a.bootstrapListener != nil {
+		go func() {
+			if err := a.bootstrapListener.Run(runCtx); err != nil && runCtx.Err() == nil {
+				a.logger.Error("inviter bootstrap listener stopped", slog.String("err", err.Error()))
+			}
+		}()
+	}
+	if a.inviter != nil {
+		go func() {
+			ticker := time.NewTicker(time.Minute)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-runCtx.Done():
+					return
+				case <-ticker.C:
+					a.inviter.Sweep(runCtx)
+				}
+			}
+		}()
+	}
 	if err := svc.Start(); err != nil {
 		ipcCancel()
 		<-ipcErrs
@@ -486,6 +723,140 @@ func (a *Agent) Run(ctx context.Context) error {
 	ipcCancel()
 	<-ipcErrs
 	return runCtx.Err()
+}
+
+func (a *Agent) watchNetUsers(ctx context.Context, sender *channelgo.Sender) {
+	values := sender.Values("network/agents/list", nil)
+	defer values.Return()
+	// known tracks the profile set of the previous snapshot so a newly
+	// learned user immediately receives its effective global + manual port
+	// grants instead of waiting for the next explicit update.
+	known := map[string]struct{}{}
+	for {
+		item, err := values.Next(ctx)
+		if err != nil || item.Done {
+			return
+		}
+		encoded, err := json.Marshal(item.Value)
+		if err != nil {
+			continue
+		}
+		var profiles []protocol.AgentProfile
+		if json.Unmarshal(encoded, &profiles) != nil {
+			continue
+		}
+		a.netUsers.Replace(profiles)
+		// A joiner that bound at hub-pro through this inviter appears in the
+		// agents list with its permanent overlay addresses. Extend its active
+		// temporary peer so the inviter keeps forwarding the adopted session's
+		// control traffic (the bootstrap peer only allows the temporary
+		// point-to-point addresses). Idempotent per snapshot.
+		if a.inviter != nil {
+			for _, profile := range profiles {
+				if profile.Key == "" || len(profile.OverlayAddresses) == 0 {
+					continue
+				}
+				prefixes := make([]netip.Prefix, 0, len(profile.OverlayAddresses))
+				for _, value := range profile.OverlayAddresses {
+					if address, err := netip.ParseAddr(value); err == nil {
+						bits := 128
+						if address.Is4() {
+							bits = 32
+						}
+						prefixes = append(prefixes, netip.PrefixFrom(address, bits))
+					}
+				}
+				if len(prefixes) == 0 {
+					continue
+				}
+				if err := a.inviter.UpdateJoinerAllowedIPs(ctx, profile.Key, prefixes); err != nil &&
+					!errors.Is(err, invitation.ErrBootstrapReplay) {
+					a.logger.Error("hubnet: extend joiner peer allowed ips",
+						slog.String("user", profile.Key), slog.String("err", err.Error()))
+				}
+			}
+		}
+		if a.enforcementMgr == nil || a.netPorts == nil {
+			continue
+		}
+		current := map[string]struct{}{}
+		var added []protocol.AgentProfile
+		for _, profile := range profiles {
+			if profile.Key == "" || !a.netUsers.Exists(profile.Key) {
+				continue
+			}
+			current[profile.Key] = struct{}{}
+			if _, ok := known[profile.Key]; !ok {
+				added = append(added, profile)
+			}
+		}
+		known = current
+		if len(added) == 0 {
+			continue
+		}
+		key, _ := a.profileID.PublicKeyBase64()
+		destinations := a.netUsers.Addresses(key)
+		for _, profile := range added {
+			effective := a.netPorts.Effective(profile.Key)
+			if err := a.enforcementMgr.ReplaceManual(
+				profile.Key,
+				profile.OverlayAddresses,
+				destinations,
+				enforcement.ManualPorts{TCP: effective.TCP, UDP: effective.UDP},
+			); err != nil {
+				a.logger.Error(
+					"hubnet: apply port grants to new user",
+					slog.String("user", profile.Key),
+					slog.String("err", err.Error()),
+				)
+			}
+		}
+	}
+}
+
+// currentNodeEndpoint returns the hub-pro advertised hub-net-node endpoint,
+// falling back to the locally configured node endpoints. Empty disables node
+// registration.
+func (a *Agent) currentNodeEndpoint() string {
+	a.mu.Lock()
+	subscribed := a.nodeEndpoint
+	a.mu.Unlock()
+	if subscribed != "" {
+		return subscribed
+	}
+	if a.control == nil {
+		return ""
+	}
+	for _, endpoint := range a.control.NodeConfig().Endpoints {
+		if strings.TrimSpace(endpoint) != "" {
+			return strings.TrimSpace(endpoint)
+		}
+	}
+	return ""
+}
+
+// watchNodeEndpoint mirrors hub-pro's hub/net/node stream so node registrations
+// follow operator changes to the configured rendezvous endpoint.
+func (a *Agent) watchNodeEndpoint(ctx context.Context, sender *channelgo.Sender) {
+	values := sender.Values("hub/net/node", nil)
+	defer values.Return()
+	for {
+		item, err := values.Next(ctx)
+		if err != nil || item.Done {
+			return
+		}
+		encoded, err := json.Marshal(item.Value)
+		if err != nil {
+			continue
+		}
+		var endpoint string
+		if json.Unmarshal(encoded, &endpoint) != nil {
+			continue
+		}
+		a.mu.Lock()
+		a.nodeEndpoint = strings.TrimSpace(endpoint)
+		a.mu.Unlock()
+	}
 }
 
 // OpenShare publishes one daemon-owned loopback share.
@@ -634,6 +1005,7 @@ func (a *Agent) configureInterface() error {
 		PrivateKey: append([]byte(nil), a.wgPrivate...),
 		Address:    address,
 		ListenPort: wireguard.DefaultPort,
+		Peers:      append([]wireguard.PeerConfig(nil), a.initialPeers...),
 	}
 	if err := a.adapter.Up(config); err != nil {
 		_ = a.adapter.Down()
@@ -788,7 +1160,7 @@ func (a *Agent) ensureVerifier(seedHubKey, seedHubNetworkID string) error {
 	verifier, err := grant.NewVerifier(grant.LocalBinding{
 		HubKey:             hubKey,
 		HubNetworkID:       hubNetworkID,
-		CallerProfileKey:   snap.ProfileKey,
+		CallerKey:          snap.Key,
 		CallerWireGuardKey: localWireGuardKey,
 	}, a.lookupGeneration)
 	if err != nil {
@@ -853,7 +1225,6 @@ func (a *Agent) ConnectToShare(ctx context.Context, resourceID, preferredProvide
 	}
 	snap := a.profile.Snapshot()
 	body := map[string]any{
-		"callerProfileKey":   snap.ProfileKey,
 		"callerWireGuardKey": base64.StdEncoding.EncodeToString(snap.WireGuardPubKey),
 		"resourceId":         resourceID,
 	}

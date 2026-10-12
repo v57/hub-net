@@ -41,8 +41,8 @@ func TestE2EAuthorizedTCPShare(t *testing.T) {
 	caller := h.Caller()
 
 	att := providerAttestation(t, provider, shareName, "tcp", "127.0.0.1", tcpPort)
-	if att.AgentKey != provider.AgentKey {
-		t.Fatalf("attestation agentKey = %s, want %s", att.AgentKey, provider.AgentKey)
+	if att.Key != provider.Key {
+		t.Fatalf("attestation key = %s, want %s", att.Key, provider.Key)
 	}
 
 	grant := h.IssueGrant(resourceID, "tcp", tcpPort)

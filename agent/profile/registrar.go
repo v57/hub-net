@@ -1,4 +1,4 @@
-// registrar.go sends the network/agent/register message on every Hub
+// registrar.go sends the hub/net/bind message on every Hub
 // (re)connect, updating the profile lifecycle as Hub responds.
 //
 // Hub requires the agent to register its profile after authentication so it
@@ -26,33 +26,33 @@ import (
 // operation.
 const DefaultRegistrationTimeout = 10 * time.Second
 
-// Registrar sends network/agent/register and updates the Profile lifecycle.
+// Registrar sends hub/net/bind and updates the Profile lifecycle.
 type Registrar struct {
-	profile   *Profile
-	agentKey  string
-	timeout   time.Duration
-	platform  string
-	name      string
+	profile  *Profile
+	key      string
+	timeout  time.Duration
+	platform string
+	name     string
 }
 
 // RegistrarOptions configures the Registrar.
 type RegistrarOptions struct {
 	Profile  *Profile
-	AgentKey string
+	Key      string
 	Timeout  time.Duration
 	Name     string
 	Platform string
 }
 
-// NewRegistrar constructs a Registrar. AgentKey is the authenticated Hub
+// NewRegistrar constructs a Registrar. Key is the authenticated Hub
 // service key of the agent's Hub identity; the Hub enforces it matches the
 // connection.
 func NewRegistrar(options RegistrarOptions) (*Registrar, error) {
 	if options.Profile == nil {
 		return nil, errors.New("profile: registrar requires Profile")
 	}
-	if options.AgentKey == "" {
-		return nil, errors.New("profile: registrar requires AgentKey")
+	if options.Key == "" {
+		return nil, errors.New("profile: registrar requires Key")
 	}
 	timeout := options.Timeout
 	if timeout == 0 {
@@ -64,34 +64,32 @@ func NewRegistrar(options RegistrarOptions) (*Registrar, error) {
 	}
 	return &Registrar{
 		profile:  options.Profile,
-		agentKey: options.AgentKey,
+		key:      options.Key,
 		timeout:  timeout,
 		platform: platform,
 		name:     options.Name,
 	}, nil
 }
 
-// RegisterBody returns the wire body sent to network/agent/register. Exported
+// RegisterBody returns the wire body sent to hub/net/bind. Exported
 // so tests can assert the shape without spinning up a Channel.
-func (r *Registrar) RegisterBody() (protocol.AgentProfile, error) {
+func (r *Registrar) RegisterBody() (protocol.AgentBindRequest, error) {
 	snap := r.profile.Snapshot()
 	wgKey, err := encodeWireGuardPublic(snap.WireGuardPubKey)
 	if err != nil {
-		return protocol.AgentProfile{}, err
+		return protocol.AgentBindRequest{}, err
 	}
-	return protocol.AgentProfile{
-		Version:          protocol.WireVersion,
-		ProfileKey:       snap.ProfileKey,
-		AgentKey:         r.agentKey,
-		WireGuardKey:     wgKey,
-		Name:             r.name,
-		Platform:         r.platform,
-		OverlayAddresses: []string{},
-		ConnectedAt:      time.Now().UTC().Format(time.RFC3339Nano),
+	return protocol.AgentBindRequest{
+		AgentProfileRegistration: protocol.AgentProfileRegistration{
+			Version: protocol.WireVersion, WireGuardKey: wgKey, Name: r.name,
+			Platform: r.platform, OverlayAddresses: []string{},
+			ConnectedAt: time.Now().UTC().Format(time.RFC3339Nano),
+		},
+		BindingKind: protocol.LocalAgentBindingMachine,
 	}, nil
 }
 
-// Register sends network/agent/register through sender and records the Hub
+// Register sends hub/net/bind through sender and records the Hub
 // response. The Hub allocates overlay addresses and binds the WireGuard key
 // to the profile. On success the profile moves to Registered with the Hub
 // issued overlay address.
@@ -110,25 +108,23 @@ func (r *Registrar) Register(ctx context.Context, sender *channelgo.Sender) erro
 	// the client side; we round-trip through JSON to land in registerResponse
 	// so both the in-process inline transport and the WebSocket transport
 	// produce the same typed value.
-	raw, err := sender.Send("network/agent/register", body)
+	raw, err := sender.Send("hub/net/bind", body)
 	if err != nil {
 		r.profile.SetState(StateRegistering)
-		return fmt.Errorf("profile: network/agent/register: %w", err)
+		return fmt.Errorf("profile: hub/net/bind: %w", err)
 	}
 	response, err := decodeRegisterResponse(raw)
 	if err != nil {
 		r.profile.SetState(StateRegistering)
-		return fmt.Errorf("profile: network/agent/register: %w", err)
+		return fmt.Errorf("profile: hub/net/bind: %w", err)
 	}
 	registered := response.extract()
-	if registered.ProfileKey != body.ProfileKey || registered.AgentKey != body.AgentKey {
+	if registered.Key != r.key {
 		r.profile.SetState(StateUnregistered)
 		return fmt.Errorf("profile: hub returned mismatched profile registration")
 	}
-	// hub-pro returns {success: true} today and does not echo hubKey/hubNetworkId
-	// back through this path. The Hub MAY include them so the agent can build a
-	// grant.LocalBinding without waiting for the first grant; otherwise the
-	// fields stay empty and are seeded from the first signature-verified grant.
+	// Persist Hub trust returned by binding so compact invitations can identify
+	// their signer without carrying the Hub public key.
 	r.profile.ConfirmRegistration(
 		firstOrEmpty(registered.OverlayAddresses),
 		registered.HubNetworkID,
@@ -181,11 +177,8 @@ func decodeRegisterResponse(raw any) (registerResponse, error) {
 	return response, nil
 }
 
-// registerResponse mirrors the Hub network/agent/register reply. The Hub
-// currently returns `{success: true}`; we also accept the full registered
-// profile so future Hub versions can echo allocated addresses back without a
-// follow-up stream read. HubKey/HubNetworkID are optional echoes of the trusted
-// Hub signing identity (see Profile.ConfirmRegistration).
+// registerResponse mirrors the Hub hub/net/bind reply. The Hub
+// returns the full registered profile and Hub signing identity.
 type registerResponse struct {
 	Success      bool                  `json:"success"`
 	Profile      protocol.AgentProfile `json:"profile,omitempty"`
@@ -197,10 +190,9 @@ type registerResponse struct {
 // the profile we leave overlay addresses empty; they arrive via the agents
 // list stream in later tasks, but the lifecycle still moves to Registered.
 func (r registerResponse) extract() extractedProfile {
-	if r.Profile.ProfileKey != "" {
+	if r.Profile.Key != "" {
 		return extractedProfile{
-			ProfileKey:       r.Profile.ProfileKey,
-			AgentKey:         r.Profile.AgentKey,
+			Key:              r.Profile.Key,
 			OverlayAddresses: r.Profile.OverlayAddresses,
 			HubKey:           r.HubKey,
 			HubNetworkID:     r.HubNetworkID,
@@ -210,8 +202,7 @@ func (r registerResponse) extract() extractedProfile {
 }
 
 type extractedProfile struct {
-	ProfileKey       string
-	AgentKey         string
+	Key              string
 	OverlayAddresses []string
 	HubKey           string
 	HubNetworkID     string

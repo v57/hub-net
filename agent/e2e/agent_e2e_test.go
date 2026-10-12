@@ -231,7 +231,7 @@ func TestAgentE2EAuthorizedTCPShare(t *testing.T) {
 
 	candidates := []protocol.Candidate{{
 		Version: protocol.WireVersion, CandidateID: "cand-tcp", SessionID: "sess-tcp",
-		AgentKey: providerAgentKey(t, provider), Kind: "host", Transport: "udp",
+		Key: providerKey(t, provider), Kind: "host", Transport: "udp",
 		Address: "198.51.100.30", Port: 51820, Priority: 100,
 		ExpiresAt: time.Now().Add(time.Minute).Format(time.RFC3339Nano),
 	}}
@@ -297,7 +297,7 @@ func TestAgentE2EAuthorizedUDPShare(t *testing.T) {
 
 	candidates := []protocol.Candidate{{
 		Version: protocol.WireVersion, CandidateID: "cand-udp", SessionID: "sess-udp",
-		AgentKey: providerAgentKey(t, provider), Kind: "host", Transport: "udp",
+		Key: providerKey(t, provider), Kind: "host", Transport: "udp",
 		Address: "198.51.100.30", Port: 51820, Priority: 100,
 		ExpiresAt: time.Now().Add(time.Minute).Format(time.RFC3339Nano),
 	}}
@@ -341,14 +341,14 @@ func TestAgentE2ES3PermissionPlanesStayIndependent(t *testing.T) {
 	const s3Port = 9001
 	resourceID := provider.publishShare(t, "s3", "tcp", s3Port)
 	caller.agent.SetResourceGeneration(resourceID, 1)
-	callerKey := providerAgentKey(t, caller)
+	callerKey := providerKey(t, caller)
 	sender := caller.agent.HubService().Sender()
 	if sender == nil {
 		t.Fatal("caller sender not connected")
 	}
 	candidates := []protocol.Candidate{{
 		Version: protocol.WireVersion, CandidateID: "cand-s3", SessionID: "sess-s3",
-		AgentKey: providerAgentKey(t, provider), Kind: "host", Transport: "udp",
+		Key: providerKey(t, provider), Kind: "host", Transport: "udp",
 		Address: "198.51.100.30", Port: 51820, Priority: 100,
 		ExpiresAt: time.Now().Add(time.Minute).Format(time.RFC3339Nano),
 	}}
@@ -398,7 +398,7 @@ func TestAgentE2EBlockedPortRejectsTamperedGrant(t *testing.T) {
 
 	candidates := []protocol.Candidate{{
 		Version: protocol.WireVersion, CandidateID: "cand-blocked", SessionID: "sess-blocked",
-		AgentKey: providerAgentKey(t, provider), Kind: "host", Transport: "udp",
+		Key: providerKey(t, provider), Kind: "host", Transport: "udp",
 		Address: "198.51.100.30", Port: 51820, Priority: 100,
 		ExpiresAt: time.Now().Add(time.Minute).Format(time.RFC3339Nano),
 	}}
@@ -460,7 +460,7 @@ func TestAgentE2ERevocationTerminatesFlow(t *testing.T) {
 
 	candidates := []protocol.Candidate{{
 		Version: protocol.WireVersion, CandidateID: "cand-rev", SessionID: "sess-rev",
-		AgentKey: providerAgentKey(t, provider), Kind: "host", Transport: "udp",
+		Key: providerKey(t, provider), Kind: "host", Transport: "udp",
 		Address: "198.51.100.30", Port: 51820, Priority: 100,
 		ExpiresAt: time.Now().Add(time.Minute).Format(time.RFC3339Nano),
 	}}
@@ -521,11 +521,11 @@ func TestAgentE2EHubReconnectRecovery(t *testing.T) {
 
 	providerBefore := provider.agent.Profile().Snapshot()
 	callerBefore := caller.agent.Profile().Snapshot()
-	providerKey := providerAgentKey(t, provider)
-	callerKey := providerAgentKey(t, caller)
-	if hub.RegistrationCount(providerKey) != 1 || hub.RegistrationCount(callerKey) != 1 {
+	providerIdentityKey := providerKey(t, provider)
+	callerKey := providerKey(t, caller)
+	if hub.RegistrationCount(providerIdentityKey) != 1 || hub.RegistrationCount(callerKey) != 1 {
 		t.Fatalf("initial registration counts provider=%d caller=%d, want 1 each",
-			hub.RegistrationCount(providerKey), hub.RegistrationCount(callerKey))
+			hub.RegistrationCount(providerIdentityKey), hub.RegistrationCount(callerKey))
 	}
 
 	if err := hub.Restart(); err != nil {
@@ -533,24 +533,24 @@ func TestAgentE2EHubReconnectRecovery(t *testing.T) {
 	}
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
-		if hub.RegistrationCount(providerKey) >= 2 && hub.RegistrationCount(callerKey) >= 2 {
+		if hub.RegistrationCount(providerIdentityKey) >= 2 && hub.RegistrationCount(callerKey) >= 2 {
 			break
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	if hub.RegistrationCount(providerKey) < 2 || hub.RegistrationCount(callerKey) < 2 {
+	if hub.RegistrationCount(providerIdentityKey) < 2 || hub.RegistrationCount(callerKey) < 2 {
 		t.Fatalf("re-registration counts provider=%d caller=%d, want >=2 each",
-			hub.RegistrationCount(providerKey), hub.RegistrationCount(callerKey))
+			hub.RegistrationCount(providerIdentityKey), hub.RegistrationCount(callerKey))
 	}
 
 	providerAfter := provider.agent.Profile().Snapshot()
 	callerAfter := caller.agent.Profile().Snapshot()
-	if providerAfter.ProfileKey != providerBefore.ProfileKey ||
+	if providerAfter.Key != providerBefore.Key ||
 		providerAfter.OverlayAddress != providerBefore.OverlayAddress {
 		t.Fatalf("provider binding changed across reconnect: before=%+v after=%+v",
 			providerBefore, providerAfter)
 	}
-	if callerAfter.ProfileKey != callerBefore.ProfileKey ||
+	if callerAfter.Key != callerBefore.Key ||
 		callerAfter.OverlayAddress != callerBefore.OverlayAddress {
 		t.Fatalf("caller binding changed across reconnect: before=%+v after=%+v",
 			callerBefore, callerAfter)
@@ -571,7 +571,7 @@ func TestAgentE2EProcessRestartRecovery(t *testing.T) {
 	first := startAgentWithState(t, hub.Port(), "process-restart", stateDir)
 	first.waitRegistered(t, "process-restart-first")
 	before := first.agent.Profile().Snapshot()
-	beforeAgentKey := providerAgentKey(t, first)
+	beforeKey := providerKey(t, first)
 	beforeWireGuardKey := first.agent.Profile().WireGuardPublicKey()
 
 	first.stopAgent(t, "process-restart-first")
@@ -579,20 +579,20 @@ func TestAgentE2EProcessRestartRecovery(t *testing.T) {
 	replacement := startAgentWithState(t, hub.Port(), "process-restart", stateDir)
 	replacement.waitRegistered(t, "process-restart-replacement")
 	after := replacement.agent.Profile().Snapshot()
-	afterAgentKey := providerAgentKey(t, replacement)
+	afterKey := providerKey(t, replacement)
 	afterWireGuardKey := replacement.agent.Profile().WireGuardPublicKey()
 
-	if afterAgentKey != beforeAgentKey {
+	if afterKey != beforeKey {
 		t.Fatalf("profile identity changed across process restart")
 	}
 	if !bytes.Equal(afterWireGuardKey, beforeWireGuardKey) {
 		t.Fatalf("WireGuard identity changed across process restart")
 	}
-	if after.ProfileKey != before.ProfileKey || after.OverlayAddress != before.OverlayAddress {
+	if after.Key != before.Key || after.OverlayAddress != before.OverlayAddress {
 		t.Fatalf("Hub binding changed across process restart: before=%+v after=%+v",
 			before, after)
 	}
-	if got := hub.RegistrationCount(beforeAgentKey); got != 2 {
+	if got := hub.RegistrationCount(beforeKey); got != 2 {
 		t.Fatalf("registration count after process restart = %d, want 2", got)
 	}
 }
@@ -673,7 +673,7 @@ func TestAgentE2EManualTCPUDPServiceRepublishesAfterHubRestart(t *testing.T) {
 	provider.agent.SetResourceGeneration(publications[udpShare].ResourceID, 1)
 	candidates := []protocol.Candidate{{
 		Version: protocol.WireVersion, CandidateID: "cand-manual", SessionID: "sess-manual",
-		AgentKey: providerAgentKey(t, provider), Kind: "host", Transport: "udp",
+		Key: providerKey(t, provider), Kind: "host", Transport: "udp",
 		Address: "198.51.100.30", Port: 51820, Priority: 100,
 		ExpiresAt: time.Now().Add(time.Minute).Format(time.RFC3339Nano),
 	}}
@@ -732,10 +732,10 @@ func TestAgentE2EManualTCPUDPServiceRepublishesAfterHubRestart(t *testing.T) {
 	}
 }
 
-// providerAgentKey returns the provider agent's authenticated key (base64 SPKI
-// of its Hub identity), used to populate the candidate.AgentKey that the
-// connection manager matches against grant.TargetAgentKey.
-func providerAgentKey(t *testing.T, s *agentSide) string {
+// providerKey returns the provider agent's authenticated key (base64 SPKI
+// of its Hub identity), used to populate the candidate.Key that the
+// connection manager matches against grant.TargetKey.
+func providerKey(t *testing.T, s *agentSide) string {
 	t.Helper()
 	id := s.agent.HubService().Identity()
 	pub, err := id.PublicKeyBase64()

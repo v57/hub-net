@@ -251,11 +251,15 @@ func (a *linuxAdapter) existingOverlayRoutesLocked(ownIndex int32) ([]RouteEntry
 // buildRouteMessage constructs an RTM_NEWROUTE / RTM_DELROUTE message. The
 // route is unicast, main table, static protocol, bound to ifIndex, with
 // destination = prefix. extraFlags ORs into the netlink flags (NLM_F_REPLACE
-// for the idempotent install path; 0 for delete).
+// for the idempotent install path; 0 for delete). NLM_F_EXCL is deliberately
+// NOT set: EXCL and REPLACE are mutually exclusive in rtm_newroute (EXCL fails
+// with EEXIST before REPLACE is considered), so a replace-style install would
+// never actually replace an existing overlay route. A fresh route is created
+// by NLM_F_CREATE; an existing one is co-opted by NLM_F_REPLACE.
 func buildRouteMessage(msgType uint16, prefix netip.Prefix, ifIndex int32, extraFlags uint16) []byte {
 	hdr := make([]byte, unix.NLMSG_HDRLEN+sizeofRtmsg)
 	binary.LittleEndian.PutUint16(hdr[4:], msgType)
-	binary.LittleEndian.PutUint16(hdr[6:], unix.NLM_F_REQUEST|unix.NLM_F_ACK|unix.NLM_F_CREATE|unix.NLM_F_EXCL|extraFlags)
+	binary.LittleEndian.PutUint16(hdr[6:], unix.NLM_F_REQUEST|unix.NLM_F_ACK|unix.NLM_F_CREATE|extraFlags)
 	var family uint8
 	if prefix.Addr().Is4() {
 		family = unix.AF_INET

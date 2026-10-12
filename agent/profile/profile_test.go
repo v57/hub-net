@@ -28,8 +28,8 @@ func TestProfileLifecycle(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 	pub, _ := id.PublicKeyBase64()
-	if p.ProfileKey() != pub {
-		t.Fatalf("ProfileKey mismatch")
+	if p.Key() != pub {
+		t.Fatalf("Key mismatch")
 	}
 	if p.State() != StateUnregistered {
 		t.Fatalf("initial state = %s, want unregistered", p.State())

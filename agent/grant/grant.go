@@ -28,7 +28,7 @@ var (
 type LocalBinding struct {
 	HubKey             string
 	HubNetworkID       string
-	CallerProfileKey   string
+	CallerKey          string
 	CallerWireGuardKey string
 }
 
@@ -47,7 +47,7 @@ type Verifier struct {
 
 func NewVerifier(local LocalBinding, generations GenerationLookup) (*Verifier, error) {
 	if local.HubKey == "" || local.HubNetworkID == "" ||
-		local.CallerProfileKey == "" || local.CallerWireGuardKey == "" {
+		local.CallerKey == "" || local.CallerWireGuardKey == "" {
 		return nil, fmt.Errorf("%w: incomplete local binding", ErrBindingMismatch)
 	}
 	if _, err := parseEd25519PublicKey(local.HubKey); err != nil {
@@ -83,12 +83,12 @@ func (v *Verifier) Verify(grant protocol.ConnectionGrant) error {
 	if grant.Version != protocol.WireVersion || grant.GrantID == "" ||
 		grant.ResourceID == "" || grant.ProviderID == "" ||
 		(grant.Protocol != "tcp" && grant.Protocol != "udp") ||
-		grant.DestinationPort == 0 || grant.TargetAgentKey == "" {
+		grant.DestinationPort == 0 || grant.TargetKey == "" {
 		return ErrInvalidGrant
 	}
 	if grant.HubKey != v.local.HubKey ||
 		grant.HubNetworkID != v.local.HubNetworkID ||
-		grant.CallerProfileKey != v.local.CallerProfileKey ||
+		grant.CallerKey != v.local.CallerKey ||
 		grant.CallerWireGuardKey != v.local.CallerWireGuardKey {
 		return ErrBindingMismatch
 	}

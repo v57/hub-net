@@ -458,6 +458,12 @@ func (s *Store) memberDir(id string) string {
 	sum := sha256.Sum256([]byte(id))
 	return filepath.Join(s.root, "memberships", hex.EncodeToString(sum[:]))
 }
+
+// MemberDir returns the private directory for one membership id. Callers that
+// place per-membership material before Commit (for example a joined
+// membership's identity and WireGuard key files) use it to target the same
+// directory loadOne will derive.
+func (s *Store) MemberDir(id string) string  { return s.memberDir(id) }
 func (s *Store) recordPath(id string) string { return filepath.Join(s.memberDir(id), "record.json") }
 func (s *Store) stagePath(id string) string {
 	sum := sha256.Sum256([]byte(id))

@@ -7,11 +7,69 @@ import (
 	"fmt"
 	"net/netip"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/v57/hub-service-go/protocol"
 )
+
+type ManualPorts struct{ TCP, UDP []uint16 }
+
+// ReplaceManual atomically replaces one service identity's manually granted ports.
+func (m *Manager) ReplaceManual(userID string, sourceAddresses, destinationAddresses []string, ports ManualPorts) error {
+	if userID == "" {
+		return ErrInvalidAuthorization
+	}
+	prefix := "manual:" + userID + ":"
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	previous := cloneRules(m.rules)
+	removed := map[string]struct{}{}
+	for key, rule := range m.rules {
+		if strings.HasPrefix(rule.ResourceID, prefix) {
+			removed[rule.ResourceID] = struct{}{}
+			delete(m.rules, key)
+		}
+	}
+	for _, sourceValue := range sourceAddresses {
+		source, err := parseOverlayHost(sourceValue)
+		if err != nil {
+			continue
+		}
+		for _, destinationValue := range destinationAddresses {
+			destination, err := parseOverlayHost(destinationValue)
+			if err != nil || source.Is4() != destination.Is4() {
+				continue
+			}
+			for _, item := range []struct {
+				protocol string
+				ports    []uint16
+			}{{"tcp", ports.TCP}, {"udp", ports.UDP}} {
+				for _, port := range item.ports {
+					if port == 0 {
+						m.rules = previous
+						return ErrInvalidAuthorization
+					}
+					id := fmt.Sprintf("%s%s:%d", prefix, item.protocol, port)
+					rule := Rule{ResourceID: id, ProviderID: "manual", Source: source, Destination: destination, DestinationPort: port, Protocol: item.protocol, ExpiresAt: time.Now().AddDate(100, 0, 0)}
+					m.rules[ruleKey(rule)] = rule
+					delete(removed, id)
+				}
+			}
+		}
+	}
+	if err := m.applyLocked(); err != nil {
+		m.rules = previous
+		return fmt.Errorf("enforcement: replace manual rules: %w", err)
+	}
+	for id := range removed {
+		if err := m.backend.TerminateResource(id); err != nil {
+			return fmt.Errorf("enforcement: terminate manual flow: %w", err)
+		}
+	}
+	return nil
+}
 
 var ErrInvalidAuthorization = errors.New("enforcement: invalid authorization")
 var ErrPlatformUnsupported = errors.New("enforcement: platform backend unsupported")

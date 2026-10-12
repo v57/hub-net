@@ -3,12 +3,12 @@
 // Flow (design decision 2):
 //
 //  1. service requests challenge
-//  2. agent issues nonce + agentKey
+//  2. agent issues nonce + key
 //  3. service signs nonce with its Ed25519 Hub identity key
 //  4. service requests attestation, including signed nonce + local target
 //  5. agent verifies: nonce freshness, signature valid under serviceKey,
 //     target host is local (loopback or this machine)
-//  6. agent issues short-lived AgentAttestation binding serviceKey, agentKey,
+//  6. agent issues short-lived AgentAttestation binding serviceKey, key,
 //     shareName, protocol, target — signed in the agent-attestation domain
 //
 // Local-target check rejects arbitrary remote hosts unless subnet routing is
@@ -103,7 +103,7 @@ type pendingChallenge struct {
 type AttestHandler struct {
 	mu        sync.Mutex
 	agent     *identity.Identity
-	agentKey  string
+	key       string
 	policy    LocalTargetPolicy
 	pending   map[string]pendingChallenge
 	now       func() time.Time
@@ -125,7 +125,7 @@ func NewAttestHandler(options AttestHandlerOptions) (*AttestHandler, error) {
 	if options.Agent == nil {
 		return nil, errors.New("ipc: attest handler requires agent identity")
 	}
-	agentKey, err := options.Agent.PublicKeyBase64()
+	key, err := options.Agent.PublicKeyBase64()
 	if err != nil {
 		return nil, fmt.Errorf("ipc: read agent public key: %w", err)
 	}
@@ -143,7 +143,7 @@ func NewAttestHandler(options AttestHandlerOptions) (*AttestHandler, error) {
 	}
 	return &AttestHandler{
 		agent:     options.Agent,
-		agentKey:  agentKey,
+		key:       key,
 		policy:    policy,
 		pending:   make(map[string]pendingChallenge),
 		now:       now,
@@ -151,8 +151,8 @@ func NewAttestHandler(options AttestHandlerOptions) (*AttestHandler, error) {
 	}, nil
 }
 
-// AgentKey returns the agent's SPKI base64 public key.
-func (h *AttestHandler) AgentKey() string { return h.agentKey }
+// Key returns the agent's SPKI base64 public key.
+func (h *AttestHandler) Key() string { return h.key }
 
 // SetNowForTest replaces the clock used for nonce/attestation expiry. Tests
 // use it to advance time past the challenge TTL without sleeping.
@@ -203,7 +203,7 @@ func (h *AttestHandler) Challenge(req ChallengeRequest) (ChallengeResponse, erro
 		Version:   protocol.WireVersion,
 		Type:      MessageAttestResponse,
 		Nonce:     nonce,
-		AgentKey:  h.agentKey,
+		Key:       h.key,
 		IssuedAt:  now,
 		ExpiresAt: now.Add(ChallengeTTL),
 	}, nil
@@ -280,7 +280,7 @@ func (h *AttestHandler) Attest(req AttestRequest) (AttestResponse, error) {
 		Version:       protocol.WireVersion,
 		AttestationID: attestationID,
 		ServiceKey:    req.ServiceKey,
-		AgentKey:      h.agentKey,
+		Key:           h.key,
 		ShareName:     req.ShareName,
 		Protocol:      req.Protocol,
 		Target:        req.Target,
@@ -308,7 +308,7 @@ func (h *AttestHandler) Status(req StatusRequest) (StatusResponse, error) {
 	return StatusResponse{
 		Version:    protocol.WireVersion,
 		Type:       MessageStatusRequest,
-		AgentKey:   h.agentKey,
+		Key:        h.key,
 		Ready:      true,
 		ServerTime: now,
 		Reason:     fmt.Sprintf("%d pending challenges", pending),
@@ -321,20 +321,19 @@ func (h *AttestHandler) BindingProof(req BindingProofRequest) (BindingProofRespo
 	if req.Version != protocol.WireVersion || req.Type != MessageBindingProof {
 		return BindingProofResponse{}, errIPC("invalid_request", "invalid binding proof version or type")
 	}
-	if req.ProfileKey == "" || req.ConnectionID == "" || req.Nonce == "" {
-		return BindingProofResponse{}, errIPC("invalid_request", "profileKey, connectionId, and nonce required")
+	if req.Key == "" || req.ConnectionID == "" || req.Nonce == "" {
+		return BindingProofResponse{}, errIPC("invalid_request", "key, connectionId, and nonce required")
 	}
 	// Current agent uses one persistent Hub identity as both authenticated
 	// agent key and profile key. Reject caller-selected substitution.
-	if req.ProfileKey != h.agentKey {
-		return BindingProofResponse{}, errIPC("forbidden", "profileKey does not match local agent identity")
+	if req.Key != h.key {
+		return BindingProofResponse{}, errIPC("forbidden", "key does not match local agent identity")
 	}
 	now := h.now().UTC()
 	unsigned := BindingProofResponse{
 		Version:      protocol.WireVersion,
 		Type:         MessageBindingProof,
-		AgentKey:     h.agentKey,
-		ProfileKey:   req.ProfileKey,
+		Key:          h.key,
 		ConnectionID: req.ConnectionID,
 		Nonce:        req.Nonce,
 		Capabilities: []string{BootstrapCapability},
@@ -351,8 +350,7 @@ func bindingProofInput(proof BindingProofResponse) string {
 	return strings.Join([]string{
 		LocalBindingProofDomain,
 		strconv.Itoa(proof.Version),
-		proof.AgentKey,
-		proof.ProfileKey,
+		proof.Key,
 		proof.ConnectionID,
 		proof.Nonce,
 		strings.Join(capabilities, ","),
