@@ -36,11 +36,20 @@ type JoinResult struct {
 
 type JoinFunc func(context.Context, string) (JoinResult, error)
 
+// LocalFunc creates the membership for the hub running on this machine from
+// its address.
+type LocalFunc func(context.Context, string) (membership.Record, error)
+
+// DefaultLocalHubAddress is the hub-pro address `hub-net local` uses when none
+// is given.
+const DefaultLocalHubAddress = "ws://127.0.0.1:1997"
+
 type Service struct {
 	mu     sync.Mutex
 	daemon Daemon
 	store  *membership.Store
 	join   JoinFunc
+	local  LocalFunc
 }
 
 type Daemon interface {
@@ -52,17 +61,18 @@ type Daemon interface {
 	SetGateway(context.Context, string, bool) error
 }
 
-func NewService(daemon Daemon, store *membership.Store, join JoinFunc) (*Service, error) {
+func NewService(daemon Daemon, store *membership.Store, join JoinFunc, local LocalFunc) (*Service, error) {
 	if daemon == nil || store == nil {
 		return nil, errors.New("management: daemon and membership store required")
 	}
-	return &Service{daemon: daemon, store: store, join: join}, nil
+	return &Service{daemon: daemon, store: store, join: join, local: local}, nil
 }
 
 type Request struct {
 	Version int    `json:"version"`
 	Command string `json:"command"`
 	Code    string `json:"code,omitempty"`
+	Address string `json:"address,omitempty"`
 	Alias   string `json:"alias,omitempty"`
 	Port    uint16 `json:"port,omitempty"`
 }
@@ -109,6 +119,38 @@ func (s *Service) Execute(ctx context.Context, request Request) Response {
 			break
 		}
 		response.Joined = &result
+	case "local":
+		if s.local == nil {
+			response.Error = "local hub unavailable"
+			break
+		}
+		records, _, err := s.store.Load()
+		if err == nil {
+			for _, stored := range records {
+				if stored.Record.Local {
+					err = fmt.Errorf("this machine already serves hub %q", stored.Record.Alias)
+				}
+			}
+		}
+		var record membership.Record
+		if err == nil {
+			record, err = s.local(ctx, request.Address)
+		}
+		if err == nil {
+			err = s.store.Stage(record)
+		}
+		var stored membership.Stored
+		if err == nil {
+			stored, err = s.store.Commit(record.ID)
+		}
+		if err == nil {
+			err = s.daemon.Add(toSupervisor(stored))
+		}
+		if err != nil {
+			response.Error = err.Error()
+			break
+		}
+		response.Joined = &JoinResult{Record: record}
 	case "leave":
 		stored, found, err := s.store.FindAlias(request.Alias)
 		if err == nil && !found {
@@ -168,6 +210,7 @@ func toSupervisor(stored membership.Stored) supervisor.Membership {
 		WireGuardKeyPath: stored.WireGuardKeyPath, InterfaceName: stored.Record.InterfaceName,
 		PublicationsPath: stored.Record.PublicationsPath,
 		GatewayAllowed:   stored.Record.GatewayAllowed,
+		Local:            stored.Record.Local,
 	}
 }
 
@@ -439,6 +482,14 @@ func ParseCommand(args []string) (Request, error) {
 			return request, errors.New("usage: hub-net join <code-or-url>")
 		}
 		request.Code = args[1]
+	case "local":
+		if len(args) > 2 {
+			return request, errors.New("usage: hub-net local [hub-address]")
+		}
+		request.Address = DefaultLocalHubAddress
+		if len(args) == 2 {
+			request.Address = args[1]
+		}
 	case "leave":
 		if len(args) != 2 {
 			return request, errors.New("usage: hub-net leave <hubname>")
@@ -469,7 +520,7 @@ func ParseCommand(args []string) (Request, error) {
 			return request, fmt.Errorf("usage: hub-net %s", request.Command)
 		}
 	default:
-		return request, fmt.Errorf("unknown command %q", strconv.Quote(request.Command))
+		return request, fmt.Errorf("unknown command %q", request.Command)
 	}
 	return request, nil
 }

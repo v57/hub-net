@@ -22,8 +22,10 @@ import (
 	"log/slog"
 	"net"
 	"net/netip"
+	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -86,17 +88,23 @@ type Agent struct {
 	enforcementMgr     *enforcement.Manager
 	enforcementBackend enforcement.Backend
 	production         bool
-	interfaceName      string
-	initialPeers       []wireguard.PeerConfig
-	candidateChecker   connection.CandidateChecker
-	handshakeChecker   connection.HandshakeChecker
-	preflight          func() error
-	onConnect          func(context.Context, *channelgo.Sender)
-	activateNetwork    func() error
-	initialShares      []publications.Entry
-	gatewayBackend     gateway.Backend
-	gatewayAllowed     bool
-	gatewayActive      bool
+	bindingKind        protocol.LocalAgentBindingKind
+	// memberProfiles is the latest network/agents/list snapshot and
+	// memberPeers the member WireGuard peers installed from it (hub host
+	// agent only), keyed by base64 WireGuard key. Guarded by mu.
+	memberProfiles   []protocol.AgentProfile
+	memberPeers      map[string][]netip.Prefix
+	interfaceName    string
+	initialPeers     []wireguard.PeerConfig
+	candidateChecker connection.CandidateChecker
+	handshakeChecker connection.HandshakeChecker
+	preflight        func() error
+	onConnect        func(context.Context, *channelgo.Sender)
+	activateNetwork  func() error
+	initialShares    []publications.Entry
+	gatewayBackend   gateway.Backend
+	gatewayAllowed   bool
+	gatewayActive    bool
 
 	// Trusted per-resource authorization generations. The production agent
 	// populates this from a network/resource/generations subscription; the
@@ -166,6 +174,10 @@ type Options struct {
 	GatewayAllowed bool
 	// GatewayBackend owns forwarding, firewall, NAT, and flow teardown.
 	GatewayBackend gateway.Backend
+	// BindingKind is sent with hub/net/bind on every connect. Empty means
+	// "machine": the agent on the same host as hub-pro, proven over the local
+	// agent socket. Memberships created by an invitation join use "join".
+	BindingKind protocol.LocalAgentBindingKind
 }
 
 // New constructs an Agent. Defaults are applied; the caller may override the
@@ -239,6 +251,7 @@ func New(options Options) (*Agent, error) {
 		gatewayAllowed:     options.GatewayAllowed,
 		enforcementBackend: enforcementBackend,
 		production:         options.Production,
+		bindingKind:        options.BindingKind,
 		interfaceName:      interfaceName,
 		initialPeers:       append([]wireguard.PeerConfig(nil), options.InitialPeers...),
 		generations:        make(map[string]uint64),
@@ -325,9 +338,10 @@ func (a *Agent) Prepare(ctx context.Context) error {
 		return fmt.Errorf("hubnet: read profile public key: %w", err)
 	}
 	registrar, err := profile.NewRegistrar(profile.RegistrarOptions{
-		Profile: prof,
-		Key:     key,
-		Name:    "hub-net",
+		Profile:     prof,
+		Key:         key,
+		Name:        "hub-net",
+		BindingKind: a.bindingKind,
 	})
 	if err != nil {
 		return fmt.Errorf("hubnet: build registrar: %w", err)
@@ -357,7 +371,14 @@ func (a *Agent) Prepare(ctx context.Context) error {
 // Run starts the agent and blocks until ctx is cancelled or a fatal error
 // occurs. The Hub service connection and IPC server are brought up here; the
 // concrete RPC handler registration lands in HN-309.
-func (a *Agent) Run(ctx context.Context) error {
+func (a *Agent) Run(ctx context.Context) (err error) {
+	defer func() {
+		// The supervisor only records the error for `hub-net list`; log it
+		// so a session that never comes up is visible in the daemon log.
+		if err != nil && !errors.Is(err, context.Canceled) {
+			a.logger.Error("hub session stopped", slog.String("hub", fmt.Sprint(a.config.HubAddress)), slog.String("err", err.Error()))
+		}
+	}()
 	a.mu.Lock()
 	if a.started {
 		a.mu.Unlock()
@@ -407,6 +428,13 @@ func (a *Agent) Run(ctx context.Context) error {
 				a.logger.Error("wireguard interface setup failed", slog.String("err", err.Error()))
 				return
 			}
+			if err := a.allowHubControl(); err != nil {
+				a.logger.Error("hub-pro overlay access failed", slog.String("err", err.Error()))
+			}
+			a.mu.Lock()
+			profiles := a.memberProfiles
+			a.mu.Unlock()
+			a.syncMemberPeers(runCtx, profiles)
 			if a.activateNetwork != nil {
 				if err := a.activateNetwork(); err != nil {
 					_ = a.stopInterface()
@@ -417,12 +445,11 @@ func (a *Agent) Run(ctx context.Context) error {
 				}
 			}
 			if a.production {
+				// Split DNS only adds .hub.invalid names. Hosts without
+				// systemd-resolved (containers, minimal servers) still get the
+				// tunnel and reach peers by address.
 				if err := a.dnsServer.Install(runCtx); err != nil {
-					_ = a.stopInterface()
-					a.resolver.Deactivate()
-					a.profile.SetState(profile.StateUnregistered)
-					a.logger.Error("split DNS setup failed", slog.String("err", err.Error()))
-					return
+					a.logger.Warn("split DNS unavailable; overlay names will not resolve", slog.String("err", err.Error()))
 				}
 			}
 			a.resolver.Activate()
@@ -452,12 +479,10 @@ func (a *Agent) Run(ctx context.Context) error {
 	if err := controller.Register(svc); err != nil {
 		return fmt.Errorf("hubnet: register control API: %w", err)
 	}
-	if err := invitation.RegisterInviteService(svc, a.profileID, func() string {
-		endpoints := a.control.NodeConfig().Endpoints
-		if len(endpoints) > 0 {
-			return endpoints[0]
-		}
-		return ""
+	// Invitations name the node this agent is registered with, so they follow
+	// hub-pro's hub/net/node setting like the node client does.
+	if err := invitation.RegisterInviteService(svc, a.profileID, a.currentNodeEndpoint, func() bool {
+		return a.nodeClient != nil && a.nodeClient.Online()
 	}); err != nil {
 		return fmt.Errorf("hubnet: register invitation API: %w", err)
 	}
@@ -513,6 +538,7 @@ func (a *Agent) Run(ctx context.Context) error {
 	if err != nil {
 		a.logger.Warn("inviter wireguard key unavailable", slog.String("err", err.Error()))
 	} else if inviter, err := invitation.NewInviter(invitation.InviterOptions{
+		MemberPeer:   a.memberPeerAddresses,
 		Identity:     a.profileID,
 		WireGuardKey: wgPublicKey,
 		Adapter:      a.adapter,
@@ -746,36 +772,10 @@ func (a *Agent) watchNetUsers(ctx context.Context, sender *channelgo.Sender) {
 			continue
 		}
 		a.netUsers.Replace(profiles)
-		// A joiner that bound at hub-pro through this inviter appears in the
-		// agents list with its permanent overlay addresses. Extend its active
-		// temporary peer so the inviter keeps forwarding the adopted session's
-		// control traffic (the bootstrap peer only allows the temporary
-		// point-to-point addresses). Idempotent per snapshot.
-		if a.inviter != nil {
-			for _, profile := range profiles {
-				if profile.Key == "" || len(profile.OverlayAddresses) == 0 {
-					continue
-				}
-				prefixes := make([]netip.Prefix, 0, len(profile.OverlayAddresses))
-				for _, value := range profile.OverlayAddresses {
-					if address, err := netip.ParseAddr(value); err == nil {
-						bits := 128
-						if address.Is4() {
-							bits = 32
-						}
-						prefixes = append(prefixes, netip.PrefixFrom(address, bits))
-					}
-				}
-				if len(prefixes) == 0 {
-					continue
-				}
-				if err := a.inviter.UpdateJoinerAllowedIPs(ctx, profile.Key, prefixes); err != nil &&
-					!errors.Is(err, invitation.ErrBootstrapReplay) {
-					a.logger.Error("hubnet: extend joiner peer allowed ips",
-						slog.String("user", profile.Key), slog.String("err", err.Error()))
-				}
-			}
-		}
+		a.mu.Lock()
+		a.memberProfiles = profiles
+		a.mu.Unlock()
+		a.syncMemberPeers(ctx, profiles)
 		if a.enforcementMgr == nil || a.netPorts == nil {
 			continue
 		}
@@ -812,6 +812,114 @@ func (a *Agent) watchNetUsers(ctx context.Context, sender *channelgo.Sender) {
 			}
 		}
 	}
+}
+
+// syncMemberPeers keeps one WireGuard peer per network member on the hub
+// host's agent. Members reach hub-pro and shared ports through this host with
+// their permanent overlay addresses; a member still inside its bootstrap
+// window also keeps the temporary addresses (the inviter merges them).
+// Joined members' agents only see themselves and do nothing here.
+func (a *Agent) syncMemberPeers(ctx context.Context, profiles []protocol.AgentProfile) {
+	if a.bindingKind != "" && a.bindingKind != protocol.LocalAgentBindingMachine {
+		return
+	}
+	if _, up := a.adapter.State(); !up {
+		return
+	}
+	self, _ := a.profileID.PublicKeyBase64()
+	desired := make(map[string][]netip.Prefix)
+	for _, profile := range profiles {
+		if profile.Key == "" || profile.Key == self || profile.WireGuardKey == "" {
+			continue
+		}
+		key, err := base64.StdEncoding.DecodeString(profile.WireGuardKey)
+		if err != nil || len(key) != 32 {
+			continue
+		}
+		prefixes := overlayPrefixes(profile.OverlayAddresses)
+		if len(prefixes) == 0 {
+			continue
+		}
+		desired[profile.WireGuardKey] = prefixes
+		if a.inviter != nil {
+			err := a.inviter.UpdateJoinerAllowedIPs(ctx, profile.Key, prefixes)
+			if err == nil {
+				continue
+			}
+			if !errors.Is(err, invitation.ErrBootstrapReplay) {
+				a.logger.Error("update joiner peer", slog.String("user", profile.Key), slog.String("err", err.Error()))
+			}
+		}
+		if err := a.adapter.AddPeer(wireguard.PeerConfig{PublicKey: key, AllowedIPs: prefixes}); err != nil {
+			a.logger.Error("add member peer", slog.String("user", profile.Key), slog.String("err", err.Error()))
+		}
+	}
+	a.mu.Lock()
+	previous := a.memberPeers
+	a.memberPeers = desired
+	a.mu.Unlock()
+	for wireGuardKey := range previous {
+		if _, ok := desired[wireGuardKey]; ok {
+			continue
+		}
+		if key, err := base64.StdEncoding.DecodeString(wireGuardKey); err == nil {
+			_ = a.adapter.RemovePeer(key)
+		}
+	}
+}
+
+// memberPeerAddresses returns a member's permanent overlay prefixes by
+// WireGuard key, for the inviter to keep when a bootstrap peer closes.
+func (a *Agent) memberPeerAddresses(wireGuardKey []byte) []netip.Prefix {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.memberPeers[base64.StdEncoding.EncodeToString(wireGuardKey)]
+}
+
+// overlayPrefixes converts overlay addresses into host prefixes.
+func overlayPrefixes(addresses []string) []netip.Prefix {
+	prefixes := make([]netip.Prefix, 0, len(addresses))
+	for _, value := range addresses {
+		if address, err := netip.ParseAddr(value); err == nil {
+			prefixes = append(prefixes, netip.PrefixFrom(address, address.BitLen()))
+		}
+	}
+	return prefixes
+}
+
+// allowHubControl opens hub-pro's port on this host's overlay address when
+// this agent serves the hub running on the same machine. Members and joiners
+// reach hub-pro only through the overlay; everything else stays fail-closed.
+func (a *Agent) allowHubControl() error {
+	if a.enforcementMgr == nil || (a.bindingKind != "" && a.bindingKind != protocol.LocalAgentBindingMachine) {
+		return nil
+	}
+	address := a.profile.Snapshot().OverlayAddress
+	if address == "" {
+		return nil
+	}
+	return a.enforcementMgr.AllowControl([]string{address}, hubPort(a.config.HubAddress))
+}
+
+// hubPort extracts the port from a hub address (port number, "host:port" or
+// ws:// URL), defaulting to hub-pro's 1997.
+func hubPort(address any) uint16 {
+	switch value := address.(type) {
+	case int:
+		return uint16(value)
+	case float64:
+		return uint16(value)
+	case string:
+		if parsed, err := url.Parse(value); err == nil && parsed.Port() != "" {
+			value = parsed.Host
+		}
+		if _, port, err := net.SplitHostPort(value); err == nil {
+			if number, err := strconv.ParseUint(port, 10, 16); err == nil && number != 0 {
+				return uint16(number)
+			}
+		}
+	}
+	return config.DefaultHubPort
 }
 
 // currentNodeEndpoint returns the hub-pro advertised hub-net-node endpoint,

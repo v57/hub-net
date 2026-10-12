@@ -26,7 +26,9 @@ import (
 	"github.com/v57/hub-net/publications"
 	"github.com/v57/hub-net/supervisor"
 	"github.com/v57/hub-net/wireguard"
+	hubservice "github.com/v57/hub-service-go"
 	"github.com/v57/hub-service-go/identity"
+	"github.com/v57/hub-service-go/protocol"
 )
 
 var buildVersion = "dev"
@@ -68,6 +70,8 @@ func run(args []string) error {
 		switch request.Command {
 		case "join":
 			fmt.Println(management.FormatJoin(*response.Joined))
+		case "local":
+			fmt.Println("Serving " + response.Joined.Record.Alias + " as its local agent")
 		case "list":
 			if output := management.FormatList(response.Items); output != "" {
 				fmt.Println(output)
@@ -88,6 +92,11 @@ func run(args []string) error {
 		sessionConfig.WireGuardKeyPath = member.WireGuardKeyPath
 		sessionConfig.HubAddress = member.HubAddress
 		sessionConfig.AgentSocketPath = filepath.Join(member.StateDir, "service.sock")
+		if member.Local {
+			// hub-pro proves its machine-local agent over the well-known
+			// socket (HUB_NET_AGENT_SOCKET, default /run/hub-net/agent.sock).
+			sessionConfig.AgentSocketPath = cfg.AgentSocketPath
+		}
 		sessionConfig.DNSListenAddress = *dnsListen
 		// A joined membership keeps the inviter peer of its temporary
 		// bootstrap link so the hub-pro control connection through the
@@ -104,8 +113,13 @@ func run(args []string) error {
 		if err != nil {
 			return hubnet.Options{}, err
 		}
+		bindingKind := protocol.LocalAgentBindingJoin
+		if member.Local {
+			bindingKind = protocol.LocalAgentBindingMachine
+		}
 		return hubnet.Options{
 			Config: sessionConfig, Logger: logger, Production: true,
+			BindingKind:    bindingKind,
 			InterfaceName:  member.InterfaceName,
 			InitialShares:  shares,
 			GatewayAllowed: member.GatewayAllowed,
@@ -119,7 +133,7 @@ func run(args []string) error {
 	if err != nil {
 		return err
 	}
-	service, err := management.NewService(daemon, store, join)
+	service, err := management.NewService(daemon, store, join, newLocal(store))
 	if err != nil {
 		return err
 	}
@@ -238,6 +252,88 @@ func newJoin(store *membership.Store, stateDir string, logger *slog.Logger) (man
 			Record: record, VirtualHost: result.HubProHost, VirtualIP: overlayIPv4(result.OverlayAddresses),
 		}, nil
 	}, nil
+}
+
+// newLocal builds the `hub-net local` command: a membership for the hub-pro
+// running on this machine, with a fresh service identity and WireGuard key.
+// Its session binds as the machine-local agent, so it can issue invitations.
+func newLocal(store *membership.Store) management.LocalFunc {
+	return func(ctx context.Context, address string) (membership.Record, error) {
+		id, err := identity.Generate()
+		if err != nil {
+			return membership.Record{}, fmt.Errorf("hub-net: generate identity: %w", err)
+		}
+		encoded, err := id.Encode()
+		if err != nil {
+			return membership.Record{}, err
+		}
+		wireGuardKey := make([]byte, 32)
+		if _, err := rand.Read(wireGuardKey); err != nil {
+			return membership.Record{}, fmt.Errorf("hub-net: generate wireguard key: %w", err)
+		}
+		idBytes := make([]byte, 9)
+		if _, err := rand.Read(idBytes); err != nil {
+			return membership.Record{}, err
+		}
+		name, err := hubHeaderName(ctx, address, id)
+		if err != nil {
+			return membership.Record{}, fmt.Errorf("hub-net: read hub header at %s: %w", address, err)
+		}
+		records, _, err := store.Load()
+		if err != nil {
+			return membership.Record{}, err
+		}
+		usedAliases := make([]string, 0, len(records))
+		usedInterfaces := make([]string, 0, len(records))
+		for _, stored := range records {
+			usedAliases = append(usedAliases, stored.Record.Alias)
+			usedInterfaces = append(usedInterfaces, stored.Record.InterfaceName)
+		}
+		hubAddress, err := json.Marshal(address)
+		if err != nil {
+			return membership.Record{}, err
+		}
+		record := membership.Record{
+			ID:            "local-" + base64.RawURLEncoding.EncodeToString(idBytes),
+			Alias:         hubalias.Allocate(name, usedAliases),
+			Header:        name,
+			HubAddress:    hubAddress,
+			InterfaceName: nextFreeInterface(usedInterfaces),
+			Local:         true,
+		}
+		memberDir := store.MemberDir(record.ID)
+		if err := os.MkdirAll(memberDir, 0o700); err != nil {
+			return membership.Record{}, fmt.Errorf("hub-net: create membership dir: %w", err)
+		}
+		if err := os.WriteFile(filepath.Join(memberDir, "profile.identity"), []byte(encoded), 0o600); err != nil {
+			return membership.Record{}, fmt.Errorf("hub-net: persist identity: %w", err)
+		}
+		if err := os.WriteFile(filepath.Join(memberDir, "wireguard.key"), wireGuardKey, 0o600); err != nil {
+			return membership.Record{}, fmt.Errorf("hub-net: persist wireguard key: %w", err)
+		}
+		return record, nil
+	}
+}
+
+// hubHeaderName reads the public hub/header display name at address.
+func hubHeaderName(ctx context.Context, address string, id *identity.Identity) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	svc, err := hubservice.New(hubservice.Options{Address: address, Identity: id, Name: "hub-net"})
+	if err != nil {
+		return "", err
+	}
+	if err := svc.Start(); err != nil {
+		return "", err
+	}
+	defer svc.Stop()
+	header, err := hubservice.OneValueTyped[struct {
+		Name string `json:"name"`
+	}](ctx, svc, "hub/header", nil)
+	if err != nil {
+		return "", err
+	}
+	return header.Name, nil
 }
 
 // stagedJoinIdentity returns the staged identity + WireGuard key for one

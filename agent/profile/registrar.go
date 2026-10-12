@@ -28,11 +28,12 @@ const DefaultRegistrationTimeout = 10 * time.Second
 
 // Registrar sends hub/net/bind and updates the Profile lifecycle.
 type Registrar struct {
-	profile  *Profile
-	key      string
-	timeout  time.Duration
-	platform string
-	name     string
+	profile     *Profile
+	key         string
+	timeout     time.Duration
+	platform    string
+	name        string
+	bindingKind protocol.LocalAgentBindingKind
 }
 
 // RegistrarOptions configures the Registrar.
@@ -42,6 +43,8 @@ type RegistrarOptions struct {
 	Timeout  time.Duration
 	Name     string
 	Platform string
+	// BindingKind defaults to machine (the hub-pro host's own agent).
+	BindingKind protocol.LocalAgentBindingKind
 }
 
 // NewRegistrar constructs a Registrar. Key is the authenticated Hub
@@ -62,12 +65,17 @@ func NewRegistrar(options RegistrarOptions) (*Registrar, error) {
 	if platform == "" {
 		platform = runtime.GOOS
 	}
+	bindingKind := options.BindingKind
+	if bindingKind == "" {
+		bindingKind = protocol.LocalAgentBindingMachine
+	}
 	return &Registrar{
-		profile:  options.Profile,
-		key:      options.Key,
-		timeout:  timeout,
-		platform: platform,
-		name:     options.Name,
+		bindingKind: bindingKind,
+		profile:     options.Profile,
+		key:         options.Key,
+		timeout:     timeout,
+		platform:    platform,
+		name:        options.Name,
 	}, nil
 }
 
@@ -85,7 +93,7 @@ func (r *Registrar) RegisterBody() (protocol.AgentBindRequest, error) {
 			Platform: r.platform, OverlayAddresses: []string{},
 			ConnectedAt: time.Now().UTC().Format(time.RFC3339Nano),
 		},
-		BindingKind: protocol.LocalAgentBindingMachine,
+		BindingKind: r.bindingKind,
 	}, nil
 }
 

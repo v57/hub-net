@@ -305,6 +305,7 @@ type Inviter struct {
 	hubProHost  func() string
 	lifetime    time.Duration
 	now         func() time.Time
+	memberPeer  func(wireGuardKey []byte) []netip.Prefix
 
 	mu        sync.Mutex
 	active    map[string]*tempPeer
@@ -333,6 +334,10 @@ type InviterOptions struct {
 	Lifetime time.Duration
 	// Now is the clock; tests inject a controllable time.
 	Now func() time.Time
+	// MemberPeer returns the permanent overlay addresses of a network member
+	// with this WireGuard key, or nil. Closing a temporary peer of a member
+	// keeps the member's peer with those addresses instead of removing it.
+	MemberPeer func(wireGuardKey []byte) []netip.Prefix
 }
 
 // NewInviter constructs the inviter bootstrap handler.
@@ -362,6 +367,7 @@ func NewInviter(options InviterOptions) (*Inviter, error) {
 		hubProHost:  options.HubProHost,
 		lifetime:    lifetime,
 		now:         now,
+		memberPeer:  options.MemberPeer,
 		active:      make(map[string]*tempPeer),
 		allocator:   newAddressAllocator(),
 	}, nil
@@ -565,7 +571,16 @@ func (i *Inviter) CloseAll(ctx context.Context) {
 }
 
 func (i *Inviter) closeLocked(ctx context.Context, peer *tempPeer) {
-	_ = i.adapter.RemovePeer(peer.joinerWireGuard)
+	if i.memberPeer != nil {
+		if allowed := i.memberPeer(peer.joinerWireGuard); len(allowed) > 0 {
+			// The joiner became a member: drop only the bootstrap addresses.
+			_ = i.adapter.AddPeer(wireguard.PeerConfig{PublicKey: peer.joinerWireGuard, AllowedIPs: allowed})
+		} else {
+			_ = i.adapter.RemovePeer(peer.joinerWireGuard)
+		}
+	} else {
+		_ = i.adapter.RemovePeer(peer.joinerWireGuard)
+	}
 	i.allocator.release(peer.joinerV4, peer.joinerV6)
 	delete(i.active, peer.replayID)
 	_ = ctx

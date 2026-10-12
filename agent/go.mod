@@ -6,7 +6,7 @@ require (
 	github.com/v57/channel-go v0.1.0
 	github.com/v57/hub-net-node v0.0.0
 	github.com/v57/hub-service-go v0.1.0
-	golang.org/x/sys v0.22.0
+	golang.org/x/sys v0.31.0
 )
 
 replace github.com/v57/channel-go => ../../channel-go
@@ -23,4 +23,5 @@ require (
 	github.com/klauspost/cpuid/v2 v2.2.9 // indirect
 	github.com/twitchyliquid64/golang-asm v0.15.1 // indirect
 	golang.org/x/arch v0.0.0-20210923205945-b76863e36670 // indirect
+	golang.org/x/net v0.38.0 // indirect
 )

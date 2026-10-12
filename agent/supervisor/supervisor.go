@@ -29,6 +29,7 @@ type Membership struct {
 	PublicationsPath string
 	InterfaceName    string
 	GatewayAllowed   bool
+	Local            bool
 }
 
 func (m Membership) validate() error {

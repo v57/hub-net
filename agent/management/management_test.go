@@ -86,7 +86,7 @@ func testService(t *testing.T, join JoinFunc) (*Service, *fakeDaemon, *membershi
 		shares:   make(map[string]publications.Entry),
 		gateways: make(map[string]bool),
 	}
-	service, err := NewService(daemon, store, join)
+	service, err := NewService(daemon, store, join, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

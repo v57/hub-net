@@ -33,6 +33,9 @@ type Record struct {
 	TranslatedIPv6   string          `json:"translatedIpv6,omitempty"`
 	GatewayAllowed   bool            `json:"gatewayAllowed"`
 	PublicationsPath string          `json:"publicationsPath,omitempty"`
+	// Local marks the hub that runs on this machine: its session binds as the
+	// machine-local agent. Joined hubs bind with the join kind.
+	Local bool `json:"local,omitempty"`
 }
 
 type Stored struct {

@@ -191,12 +191,13 @@ type bindCall struct {
 	address      any
 	wireGuardKey string
 	name         string
+	admission    hubprotocol.DirectBootstrapResponse
 }
 
-func (f *fakeBinder) Bind(_ context.Context, address any, _ *identity.Identity, wireGuardKey, name string) (BindResult, error) {
+func (f *fakeBinder) Bind(_ context.Context, address any, _ *identity.Identity, wireGuardKey, name string, admission hubprotocol.DirectBootstrapResponse) (BindResult, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.calls = append(f.calls, bindCall{address: address, wireGuardKey: wireGuardKey, name: name})
+	f.calls = append(f.calls, bindCall{address: address, wireGuardKey: wireGuardKey, name: name, admission: admission})
 	return f.result, f.err
 }
 
@@ -309,6 +310,12 @@ func TestJoinEndToEnd(t *testing.T) {
 	}
 	if binder.calls[0].wireGuardKey != base64Std(wgPublic) {
 		t.Errorf("bind wireguard key mismatch")
+	}
+	// hub-pro admits the joiner on the inviter's signed response, so the
+	// binder must forward it unchanged.
+	admission := binder.calls[0].admission
+	if admission.JoinerWireGuardKey != base64Std(wgPublic) || admission.Signature == "" {
+		t.Errorf("bind admission = %+v, want the signed response for this joiner", admission)
 	}
 
 	// The inviter must hold the temporary joiner peer for the assigned
@@ -566,7 +573,7 @@ func TestJoinEndToEndAllInterfacesListener(t *testing.T) {
 // instead of hanging with the temporary link up.
 type blockingBinder struct{}
 
-func (blockingBinder) Bind(ctx context.Context, _ any, _ *identity.Identity, _, _ string) (BindResult, error) {
+func (blockingBinder) Bind(ctx context.Context, _ any, _ *identity.Identity, _, _ string, _ hubprotocol.DirectBootstrapResponse) (BindResult, error) {
 	<-ctx.Done()
 	return BindResult{}, ctx.Err()
 }

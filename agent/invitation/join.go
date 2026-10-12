@@ -112,7 +112,9 @@ type JoinResult struct {
 // Binder authenticates the joiner at hub-pro through the temporary link and
 // issues hub/net/bind with bindingKind "join".
 type Binder interface {
-	Bind(ctx context.Context, address any, id *identity.Identity, wireGuardKey, name string) (BindResult, error)
+	// Bind issues the joiner's first hub/net/bind. admission is the
+	// inviter-signed bootstrap response hub-pro requires to admit a new key.
+	Bind(ctx context.Context, address any, id *identity.Identity, wireGuardKey, name string, admission protocol.DirectBootstrapResponse) (BindResult, error)
 }
 
 // BindResult is the permanent membership issued by hub-pro.
@@ -275,7 +277,7 @@ func Join(ctx context.Context, options JoinOptions) (JoinResult, error) {
 	// 4. Bind at hub-pro through the inviter.
 	hubAddress := bootstrapHubAddress(response.HubProHost)
 	logger.Info("invitation join: hub/net/bind", slog.String("hub", hubAddress))
-	binding, err := binder.Bind(joinCtx, hubAddress, options.Identity, wireGuardKeyB64, "hub-net")
+	binding, err := binder.Bind(joinCtx, hubAddress, options.Identity, wireGuardKeyB64, "hub-net", response)
 	if err != nil {
 		return JoinResult{}, fmt.Errorf("invitation: join: hub/net/bind: %w", err)
 	}
@@ -704,7 +706,7 @@ func LoadInviterPeers(path string) ([]wireguard.PeerConfig, error) {
 // hubServiceBinder issues hub/net/bind through the real hub-pro service SDK.
 type hubServiceBinder struct{}
 
-func (hubServiceBinder) Bind(ctx context.Context, address any, id *identity.Identity, wireGuardKey, name string) (BindResult, error) {
+func (hubServiceBinder) Bind(ctx context.Context, address any, id *identity.Identity, wireGuardKey, name string, admission protocol.DirectBootstrapResponse) (BindResult, error) {
 	ready := make(chan struct{})
 	var once sync.Once
 	svc, err := hubservice.New(hubservice.Options{
@@ -734,6 +736,7 @@ func (hubServiceBinder) Bind(ctx context.Context, address any, id *identity.Iden
 			ConnectedAt: time.Now().UTC().Format(time.RFC3339Nano),
 		},
 		BindingKind: protocol.LocalAgentBindingJoin,
+		Admission:   &admission,
 	}
 	registered, err := hubservice.SendTyped[bindResponse](svc, "hub/net/bind", body)
 	if err != nil {
