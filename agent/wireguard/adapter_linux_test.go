@@ -224,7 +224,9 @@ func TestBuildRouteMessageShape(t *testing.T) {
 	if msgType != unix.RTM_NEWROUTE {
 		t.Fatalf("msgType = %.4x, want NEWROUTE", msgType)
 	}
-	if flags != unix.NLM_F_REQUEST|unix.NLM_F_ACK|unix.NLM_F_CREATE|unix.NLM_F_EXCL|unix.NLM_F_REPLACE {
+	// NLM_F_EXCL must not be set: combined with NLM_F_REPLACE the kernel
+	// rejects every replace of an existing route with EEXIST.
+	if flags != unix.NLM_F_REQUEST|unix.NLM_F_ACK|unix.NLM_F_CREATE|unix.NLM_F_REPLACE {
 		t.Fatalf("flags = %.4x", flags)
 	}
 	rm := readRtmsg(body[:sizeofRtmsg])

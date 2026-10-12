@@ -17,6 +17,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"net/netip"
 )
 
 // nlaAlign rounds len up to the netlink TLV alignment (NLMSG_ALIGNTO = 4).
@@ -175,4 +176,51 @@ func parseGenlmsghdr(body []byte) (cmd uint8, version uint8, rest []byte, err er
 		return 0, 0, nil, fmt.Errorf("%w: genlmsghdr need %d have %d", ErrTruncated, genlmsghdrLen, len(body))
 	}
 	return body[0], body[1], body[genlmsghdrLen:], nil
+}
+
+// Address family numbers in the sockaddr WGPEER_A_ENDPOINT carries (Linux).
+const (
+	sockaddrFamilyInet4 = 2
+	sockaddrFamilyInet6 = 10
+)
+
+// endpointSockaddr encodes a peer endpoint ("ip:port") as the struct
+// sockaddr_in / sockaddr_in6 the kernel expects in WGPEER_A_ENDPOINT. Sending
+// the endpoint as text leaves the peer without an endpoint, so it can never
+// start a handshake.
+func endpointSockaddr(endpoint string) ([]byte, error) {
+	addrPort, err := netip.ParseAddrPort(endpoint)
+	if err != nil {
+		return nil, fmt.Errorf("wireguard: endpoint %q: %w", endpoint, err)
+	}
+	addr := addrPort.Addr().Unmap()
+	if addr.Is4() {
+		// sockaddr_in: family, port (network order), address, 8 bytes padding.
+		out := make([]byte, 16)
+		binary.NativeEndian.PutUint16(out[0:2], sockaddrFamilyInet4)
+		binary.BigEndian.PutUint16(out[2:4], addrPort.Port())
+		ip := addr.As4()
+		copy(out[4:8], ip[:])
+		return out, nil
+	}
+	// sockaddr_in6: family, port, flowinfo, address, scope id.
+	out := make([]byte, 28)
+	binary.NativeEndian.PutUint16(out[0:2], sockaddrFamilyInet6)
+	binary.BigEndian.PutUint16(out[2:4], addrPort.Port())
+	ip := addr.As16()
+	copy(out[8:24], ip[:])
+	return out, nil
+}
+
+// validateEndpoints rejects peer endpoints that are not "ip:port" literals.
+func validateEndpoints(peers ...PeerConfig) error {
+	for _, peer := range peers {
+		if peer.Endpoint == "" {
+			continue
+		}
+		if _, err := endpointSockaddr(peer.Endpoint); err != nil {
+			return err
+		}
+	}
+	return nil
 }

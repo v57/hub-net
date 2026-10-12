@@ -83,6 +83,9 @@ func (a *linuxAdapter) Up(config InterfaceConfig) error {
 	if err := ValidateAllowedIPs(collectAllowedIPs(config.Peers)); err != nil {
 		return err
 	}
+	if err := validateEndpoints(config.Peers...); err != nil {
+		return err
+	}
 	if config.Name == "" {
 		config.Name = a.name
 	} else {
@@ -241,6 +244,9 @@ func (a *linuxAdapter) AddPeer(peer PeerConfig) error {
 	if err := ValidateAllowedIPs(peer.AllowedIPs); err != nil {
 		return err
 	}
+	if err := validateEndpoints(peer); err != nil {
+		return err
+	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if !a.up {
@@ -254,6 +260,16 @@ func (a *linuxAdapter) AddPeer(peer PeerConfig) error {
 	}
 	if err := a.setDeviceLocked(cfg, false, false); err != nil {
 		return fmt.Errorf("wireguard: add peer: %w", err)
+	}
+	// AddPeer also updates an existing peer (its AllowedIPs are replaced).
+	for index, existing := range a.config.Peers {
+		if string(existing.PublicKey) == string(peer.PublicKey) {
+			if peer.Endpoint == "" {
+				peer.Endpoint = existing.Endpoint
+			}
+			a.config.Peers[index] = peer
+			return nil
+		}
 	}
 	a.config.Peers = append(a.config.Peers, peer)
 	return nil
@@ -402,7 +418,10 @@ func encodePeer(w *nlmsgWriter, peer PeerConfig, remove bool) {
 		return
 	}
 	if peer.Endpoint != "" {
-		w.PutBytes(unix.WGPEER_A_ENDPOINT, []byte(peer.Endpoint))
+		// Up and AddPeer validate endpoints before encoding.
+		if sockaddr, err := endpointSockaddr(peer.Endpoint); err == nil {
+			w.PutBytes(unix.WGPEER_A_ENDPOINT, sockaddr)
+		}
 	}
 	if len(peer.AllowedIPs) > 0 {
 		allowedOff := w.PutNested(unix.WGPEER_A_ALLOWEDIPS)

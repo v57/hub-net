@@ -181,3 +181,35 @@ func TestEncodeGenlRequestShape(t *testing.T) {
 		t.Fatalf("rest = %x", rest)
 	}
 }
+
+func TestEndpointSockaddr(t *testing.T) {
+	v4, err := endpointSockaddr("172.30.0.2:51820")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want4 := make([]byte, 16)
+	binary.NativeEndian.PutUint16(want4[0:2], sockaddrFamilyInet4)
+	want4[2], want4[3] = 0xca, 0x6c // 51820
+	copy(want4[4:8], []byte{172, 30, 0, 2})
+	if string(v4) != string(want4) {
+		t.Fatalf("v4 sockaddr = %x, want %x", v4, want4)
+	}
+
+	v6, err := endpointSockaddr("[fd48:5542:4e45::1]:1964")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(v6) != 28 || binary.NativeEndian.Uint16(v6[0:2]) != sockaddrFamilyInet6 ||
+		binary.BigEndian.Uint16(v6[2:4]) != 1964 || v6[8] != 0xfd || v6[23] != 1 {
+		t.Fatalf("v6 sockaddr = %x", v6)
+	}
+
+	mapped, err := endpointSockaddr("[::ffff:10.0.0.1]:1")
+	if err != nil || len(mapped) != 16 {
+		t.Fatalf("v4-mapped endpoint must encode as sockaddr_in, got %x %v", mapped, err)
+	}
+
+	if _, err := endpointSockaddr("hub.example:51820"); err == nil {
+		t.Fatal("hostnames are not valid endpoints")
+	}
+}
