@@ -36,6 +36,13 @@ func validReplayID(t *testing.T) string {
 	return base64.RawURLEncoding.EncodeToString(raw)
 }
 
+// signalled records the node's signal for request, as the agent does when the
+// node pushes inviter.bootstrap.
+func signalled(inviter *Inviter, request protocol.DirectBootstrapRequest) protocol.DirectBootstrapRequest {
+	inviter.Expect(request.ReplayID, request.JoinerServiceKey)
+	return request
+}
+
 func newBootstrapRequest(t *testing.T, joiner *identity.Identity, wgKey []byte, replayID, nonce string, issuedAt time.Time) protocol.DirectBootstrapRequest {
 	t.Helper()
 	serviceKey, err := joiner.PublicKeyBase64()
@@ -103,7 +110,7 @@ func TestInviterRoundTrip(t *testing.T) {
 	}
 	_, joinerWG := wgKeyPair(t)
 	replayID := validReplayID(t)
-	request := newBootstrapRequest(t, joiner, joinerWG, replayID, "nonce-1", now)
+	request := signalled(inviter, newBootstrapRequest(t, joiner, joinerWG, replayID, "nonce-1", now))
 
 	response, err := inviter.Handle(context.Background(), request)
 	if err != nil {
@@ -257,7 +264,7 @@ func TestInviterRetryIdempotentAndReplayRejected(t *testing.T) {
 	}
 	_, joinerWG := wgKeyPair(t)
 	replayID := validReplayID(t)
-	request := newBootstrapRequest(t, joiner, joinerWG, replayID, "nonce-1", now)
+	request := signalled(inviter, newBootstrapRequest(t, joiner, joinerWG, replayID, "nonce-1", now))
 
 	first, err := inviter.Handle(context.Background(), request)
 	if err != nil {
@@ -287,7 +294,7 @@ func TestInviterRetryIdempotentAndReplayRejected(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, otherWG := wgKeyPair(t)
-	otherRequest := newBootstrapRequest(t, otherJoiner, otherWG, replayID, "nonce-2", now)
+	otherRequest := signalled(inviter, newBootstrapRequest(t, otherJoiner, otherWG, replayID, "nonce-2", now))
 	if _, err := inviter.Handle(context.Background(), otherRequest); !errors.Is(err, ErrBootstrapReplay) {
 		t.Fatalf("Handle replay = %v, want ErrBootstrapReplay", err)
 	}
@@ -301,7 +308,7 @@ func TestInviterSweepRemovesExpiredPeers(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, joinerWG := wgKeyPair(t)
-	request := newBootstrapRequest(t, joiner, joinerWG, validReplayID(t), "nonce-1", now)
+	request := signalled(inviter, newBootstrapRequest(t, joiner, joinerWG, validReplayID(t), "nonce-1", now))
 	if _, err := inviter.Handle(context.Background(), request); err != nil {
 		t.Fatalf("Handle: %v", err)
 	}
@@ -332,7 +339,7 @@ func TestInviterAdapterFailureReleasesAddresses(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, joinerWG := wgKeyPair(t)
-	request := newBootstrapRequest(t, joiner, joinerWG, validReplayID(t), "nonce-1", now)
+	request := signalled(inviter, newBootstrapRequest(t, joiner, joinerWG, validReplayID(t), "nonce-1", now))
 
 	adapter.SetPeerError(errors.New("boom"))
 	if _, err := inviter.Handle(context.Background(), request); err == nil {
@@ -364,7 +371,7 @@ func TestVerifyInviterResponseRejects(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, joinerWG := wgKeyPair(t)
-	request := newBootstrapRequest(t, joiner, joinerWG, validReplayID(t), "nonce-1", now)
+	request := signalled(inviter, newBootstrapRequest(t, joiner, joinerWG, validReplayID(t), "nonce-1", now))
 	response, err := inviter.Handle(context.Background(), request)
 	if err != nil {
 		t.Fatalf("Handle: %v", err)
@@ -427,11 +434,11 @@ func TestInviterAddressesDifferAcrossJoiners(t *testing.T) {
 	}
 	_, firstWG := wgKeyPair(t)
 	_, secondWG := wgKeyPair(t)
-	first, err := inviter.Handle(context.Background(), newBootstrapRequest(t, firstJoiner, firstWG, validReplayID(t), "nonce-1", now))
+	first, err := inviter.Handle(context.Background(), signalled(inviter, newBootstrapRequest(t, firstJoiner, firstWG, validReplayID(t), "nonce-1", now)))
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := inviter.Handle(context.Background(), newBootstrapRequest(t, secondJoiner, secondWG, validReplayID(t), "nonce-2", now))
+	second, err := inviter.Handle(context.Background(), signalled(inviter, newBootstrapRequest(t, secondJoiner, secondWG, validReplayID(t), "nonce-2", now)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -452,7 +459,7 @@ func TestInviterCloseAll(t *testing.T) {
 			t.Fatal(err)
 		}
 		_, wgKey := wgKeyPair(t)
-		request := newBootstrapRequest(t, joiner, wgKey, validReplayID(t), "nonce-1", now)
+		request := signalled(inviter, newBootstrapRequest(t, joiner, wgKey, validReplayID(t), "nonce-1", now))
 		if _, err := inviter.Handle(context.Background(), request); err != nil {
 			t.Fatal(err)
 		}
@@ -522,7 +529,7 @@ func TestUpdateJoinerAllowedIPs(t *testing.T) {
 	if err := SignJoinerRequest(&request, joiner.PrivateKey()); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := inviter.Handle(context.Background(), request); err != nil {
+	if _, err := inviter.Handle(context.Background(), signalled(inviter, request)); err != nil {
 		t.Fatalf("Handle: %v", err)
 	}
 	state, up := adapter.State()
@@ -576,5 +583,30 @@ func TestUpdateJoinerAllowedIPs(t *testing.T) {
 	}
 	if err := inviter.UpdateJoinerAllowedIPs(context.Background(), joinerService, []netip.Prefix{netip.MustParsePrefix("192.168.1.1/32")}); err == nil {
 		t.Error("out-of-overlay prefix accepted")
+	}
+}
+
+// The inviter's UDP listener is reachable by anyone; without the node's
+// signal for the join it must not hand out a signed response (hub-pro admits
+// joiners on that response).
+func TestInviterRejectsUnsignalledJoin(t *testing.T) {
+	now := time.Now()
+	inviter, _, _, adapter := testInviter(t, &now)
+	joiner, err := identity.Generate()
+	if err != nil {
+		t.Fatal(err)
+	}
+	joinerWG := make([]byte, 32)
+	joinerWG[0] = 9
+	request := newBootstrapRequest(t, joiner, joinerWG, validReplayID(t), "nonce-1", now)
+	if _, err := inviter.Handle(context.Background(), request); !errors.Is(err, ErrBootstrapRequest) {
+		t.Fatalf("Handle without a node signal = %v, want ErrBootstrapRequest", err)
+	}
+	if state, _ := adapter.State(); len(state.Peers) != 0 {
+		t.Fatalf("peers installed for an unsignalled join: %d", len(state.Peers))
+	}
+	inviter.Expect(request.ReplayID, "someone-else")
+	if _, err := inviter.Handle(context.Background(), request); !errors.Is(err, ErrBootstrapRequest) {
+		t.Fatalf("Handle for another joiner's signal = %v, want ErrBootstrapRequest", err)
 	}
 }

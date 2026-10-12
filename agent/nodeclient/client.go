@@ -101,6 +101,11 @@ type Options struct {
 	// bootstrap the node signals. May be nil to discard the exchange; the
 	// client still participates in the rendezvous session.
 	Bootstrap BootstrapHandler
+	// Pending is told about each join the node signals (inviter.bootstrap),
+	// as soon as the signal arrives: the invitation replay id and the
+	// joiner's session key. The inviter answers direct bootstrap requests
+	// only for signalled joins.
+	Pending func(tokenDigest, joinerKey string)
 	// Candidates returns the inviter's declared WireGuard UDP candidates to
 	// offer once its bootstrap session opens. May be nil or return nil; the
 	// node still delivers the inviter's node-observed endpoint to the joiner.
@@ -355,6 +360,9 @@ func (c *Client) runBootstrap(ctx context.Context, conn net.Conn, endpoint strin
 	if pending.InvitationCode == "" || pending.Key == "" ||
 		pending.TokenDigest == "" || pending.TransactionID == "" {
 		return errors.New("nodeclient: incomplete inviter.bootstrap signal")
+	}
+	if c.opts.Pending != nil {
+		c.opts.Pending(pending.TokenDigest, pending.Key)
 	}
 	if err := c.sendProbe(ctx, endpoint, pending); err != nil {
 		return err

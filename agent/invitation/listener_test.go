@@ -56,7 +56,7 @@ func TestListenerExchangeRoundTrip(t *testing.T) {
 	}
 	_, joinerWG := wgKeyPair(t)
 	replayID := validReplayID(t)
-	request := newBootstrapRequest(t, joiner, joinerWG, replayID, "nonce-1", now)
+	request := signalled(inviter, newBootstrapRequest(t, joiner, joinerWG, replayID, "nonce-1", now))
 	address := listener.Addr().(*net.UDPAddr)
 
 	response, err := Exchange(context.Background(), address, request, ExchangeOptions{Now: func() time.Time { return now }})
@@ -89,7 +89,7 @@ func TestListenerRejectsInvalidRequest(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, joinerWG := wgKeyPair(t)
-	request := newBootstrapRequest(t, joiner, joinerWG, validReplayID(t), "nonce-bad", now)
+	request := signalled(inviter, newBootstrapRequest(t, joiner, joinerWG, validReplayID(t), "nonce-bad", now))
 	request.Version = 99 // invalidate after signing
 
 	_, err = Exchange(context.Background(), listener.Addr().(*net.UDPAddr), request, ExchangeOptions{Now: func() time.Time { return now }})
@@ -114,7 +114,7 @@ func TestListenerRejectsReplay(t *testing.T) {
 	}
 	_, joinerWG := wgKeyPair(t)
 	replayID := validReplayID(t)
-	first := newBootstrapRequest(t, joiner, joinerWG, replayID, "nonce-1", now)
+	first := signalled(inviter, newBootstrapRequest(t, joiner, joinerWG, replayID, "nonce-1", now))
 	if _, err := Exchange(context.Background(), address, first, ExchangeOptions{Now: func() time.Time { return now }}); err != nil {
 		t.Fatalf("first Exchange: %v", err)
 	}
@@ -124,7 +124,7 @@ func TestListenerRejectsReplay(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, secondWG := wgKeyPair(t)
-	second := newBootstrapRequest(t, secondJoiner, secondWG, replayID, "nonce-2", now)
+	second := signalled(inviter, newBootstrapRequest(t, secondJoiner, secondWG, replayID, "nonce-2", now))
 	_, err = Exchange(context.Background(), address, second, ExchangeOptions{Now: func() time.Time { return now }})
 	var transportError *BootstrapTransportError
 	if !errors.As(err, &transportError) {
@@ -157,7 +157,7 @@ func TestListenerDropsGarbage(t *testing.T) {
 	// Listener still serves valid traffic after the garbage.
 	joiner, _ := identity.Generate()
 	_, joinerWG := wgKeyPair(t)
-	request := newBootstrapRequest(t, joiner, joinerWG, validReplayID(t), "nonce-ok", now)
+	request := signalled(inviter, newBootstrapRequest(t, joiner, joinerWG, validReplayID(t), "nonce-ok", now))
 	if _, err := Exchange(context.Background(), listener.Addr().(*net.UDPAddr), request, ExchangeOptions{Now: func() time.Time { return now }}); err != nil {
 		t.Fatalf("Exchange after garbage: %v", err)
 	}
@@ -261,7 +261,7 @@ func TestListenerConcurrentExchanges(t *testing.T) {
 				return
 			}
 			_, joinerWG := wgKeyPair(t)
-			request := newBootstrapRequest(t, joiner, joinerWG, validReplayID(t), "nonce-concurrent", now)
+			request := signalled(inviter, newBootstrapRequest(t, joiner, joinerWG, validReplayID(t), "nonce-concurrent", now))
 			response, err := Exchange(context.Background(), address, request, ExchangeOptions{Now: func() time.Time { return now }})
 			if err != nil {
 				errorsCh <- err
@@ -291,7 +291,7 @@ func TestListenerIdempotentRetry(t *testing.T) {
 
 	joiner, _ := identity.Generate()
 	_, joinerWG := wgKeyPair(t)
-	request := newBootstrapRequest(t, joiner, joinerWG, validReplayID(t), "nonce-retry", now)
+	request := signalled(inviter, newBootstrapRequest(t, joiner, joinerWG, validReplayID(t), "nonce-retry", now))
 	first, err := Exchange(context.Background(), address, request, ExchangeOptions{Now: func() time.Time { return now }})
 	if err != nil {
 		t.Fatalf("first Exchange: %v", err)

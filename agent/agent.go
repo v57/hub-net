@@ -526,6 +526,11 @@ func (a *Agent) Run(ctx context.Context) (err error) {
 			}
 			return listener.Probe(ctx, endpoint, probe, expectedTicketID)
 		},
+		Pending: func(tokenDigest, joinerKey string) {
+			if a.inviter != nil {
+				a.inviter.Expect(tokenDigest, joinerKey)
+			}
+		},
 		Bootstrap: func(event nodeclient.BootstrapEvent) {
 			a.logger.Info("inviter bootstrap rendezvous",
 				slog.String("joiner", event.JoinerKey),

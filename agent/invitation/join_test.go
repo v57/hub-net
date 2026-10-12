@@ -156,6 +156,9 @@ func runInviter(t *testing.T, nodeAddress, bindAddress string) *inviterHarness {
 		Probe: func(ctx context.Context, endpoint string, probe nodeprotocol.InvitationUDPProbe, expected string) error {
 			return h.listener.Probe(ctx, endpoint, probe, expected)
 		},
+		Pending: func(tokenDigest, joinerKey string) {
+			inviter.Expect(tokenDigest, joinerKey)
+		},
 		Bootstrap: func(nodeclient.BootstrapEvent) {},
 	})
 	if err != nil {

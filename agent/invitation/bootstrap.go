@@ -308,6 +308,11 @@ type Inviter struct {
 	memberPeer  func(wireGuardKey []byte) []netip.Prefix
 
 	mu        sync.Mutex
+	// expected holds the joins the node signalled, by replay id. A request
+	// for anything else is rejected: the inviter's UDP listener is reachable
+	// by anyone, and only the node enforces that an invitation is genuine
+	// and single-use.
+	expected  map[string]expectedJoin
 	active    map[string]*tempPeer
 	allocator *addressAllocator
 }
@@ -368,6 +373,7 @@ func NewInviter(options InviterOptions) (*Inviter, error) {
 		lifetime:    lifetime,
 		now:         now,
 		memberPeer:  options.MemberPeer,
+		expected:    make(map[string]expectedJoin),
 		active:      make(map[string]*tempPeer),
 		allocator:   newAddressAllocator(),
 	}, nil
@@ -377,6 +383,64 @@ func NewInviter(options InviterOptions) (*Inviter, error) {
 // and returns the signed inviter response. Repeating the identical request
 // returns the same response (transport retries); a different request for the
 // same invitation replay id is rejected.
+// expectedJoin is one join the node signalled.
+type expectedJoin struct {
+	joinerKey string
+	expiresAt time.Time
+}
+
+// expectedJoinLifetime bounds how long a node signal can be answered.
+const expectedJoinLifetime = 2 * time.Minute
+
+// signalWait bounds how long Handle waits for the node's signal: the
+// joiner's request can arrive just before the inviter.bootstrap push.
+const signalWait = 5 * time.Second
+
+// Expect records a join the node signalled: the invitation replay id and the
+// joiner's session key (a Go joiner names its WireGuard key, an Apple joiner
+// its service key).
+func (i *Inviter) Expect(replayID, joinerKey string) {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	now := i.now()
+	for id, join := range i.expected {
+		if !now.Before(join.expiresAt) {
+			delete(i.expected, id)
+		}
+	}
+	i.expected[replayID] = expectedJoin{joinerKey: joinerKey, expiresAt: now.Add(expectedJoinLifetime)}
+}
+
+// takeExpected waits up to signalWait for the node's signal for request and
+// consumes it; restore puts it back when the exchange then fails, so the
+// joiner can retry. Caller must not hold i.mu.
+func (i *Inviter) takeExpected(ctx context.Context, request protocol.DirectBootstrapRequest) (restore func(), err error) {
+	deadline := time.Now().Add(signalWait)
+	for {
+		i.mu.Lock()
+		join, ok := i.expected[request.ReplayID]
+		if ok && i.now().Before(join.expiresAt) &&
+			(join.joinerKey == request.JoinerServiceKey || join.joinerKey == request.JoinerWireGuardKey) {
+			delete(i.expected, request.ReplayID)
+			i.mu.Unlock()
+			return func() {
+				i.mu.Lock()
+				i.expected[request.ReplayID] = join
+				i.mu.Unlock()
+			}, nil
+		}
+		i.mu.Unlock()
+		if ok || time.Now().After(deadline) {
+			return nil, bootstrapFail("no node signal for this join")
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(100 * time.Millisecond):
+		}
+	}
+}
+
 func (i *Inviter) Handle(ctx context.Context, request protocol.DirectBootstrapRequest) (protocol.DirectBootstrapResponse, error) {
 	if err := VerifyJoinerRequest(request, i.now()); err != nil {
 		return protocol.DirectBootstrapResponse{}, err
@@ -386,15 +450,34 @@ func (i *Inviter) Handle(ctx context.Context, request protocol.DirectBootstrapRe
 		return protocol.DirectBootstrapResponse{}, err
 	}
 
+	// A retry of an exchange this inviter already answered gets the same
+	// response; anything new needs the node's signal.
+	i.mu.Lock()
+	if existing, ok := i.active[request.ReplayID]; ok && i.now().Before(existing.expiresAt) {
+		defer i.mu.Unlock()
+		if existing.joinerService == request.JoinerServiceKey &&
+			existing.request.Nonce == request.Nonce {
+			return existing.response, nil
+		}
+		return protocol.DirectBootstrapResponse{}, fmt.Errorf("%w: invitation already in use", ErrBootstrapReplay)
+	}
+	i.mu.Unlock()
+	restore, err := i.takeExpected(ctx, request)
+	if err != nil {
+		return protocol.DirectBootstrapResponse{}, err
+	}
+	succeeded := false
+	defer func() {
+		if !succeeded {
+			restore()
+		}
+	}()
+
 	i.mu.Lock()
 	defer i.mu.Unlock()
 	replayKey := request.ReplayID
 	if existing, ok := i.active[replayKey]; ok {
 		if i.now().Before(existing.expiresAt) {
-			if existing.joinerService == request.JoinerServiceKey &&
-				existing.request.Nonce == request.Nonce {
-				return existing.response, nil
-			}
 			return protocol.DirectBootstrapResponse{}, fmt.Errorf("%w: invitation already in use", ErrBootstrapReplay)
 		}
 		i.closeLocked(ctx, existing)
@@ -435,6 +518,7 @@ func (i *Inviter) Handle(ctx context.Context, request protocol.DirectBootstrapRe
 		joinerV6:        joinerV6,
 		expiresAt:       expiresAt,
 	}
+	succeeded = true
 	return response, nil
 }
 
