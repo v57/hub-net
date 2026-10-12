@@ -326,7 +326,9 @@ func (a *Agent) Prepare(ctx context.Context) error {
 		return fmt.Errorf("hubnet: derive wireguard public key: %w", err)
 	}
 	prof.SetWireGuardPublicKey(pub)
+	a.mu.Lock()
 	a.profile = prof
+	a.mu.Unlock()
 
 	if err := a.prepareEnforcement(); err != nil {
 		// On non-Linux platforms without an injected backend the platform
@@ -1176,6 +1178,14 @@ func (a *Agent) stopInterface() error {
 	err := a.adapter.Down()
 	a.networkUp = false
 	return err
+}
+
+// Connected reports whether the session is bound at its Hub.
+func (a *Agent) Connected() bool {
+	a.mu.Lock()
+	prof := a.profile
+	a.mu.Unlock()
+	return prof != nil && prof.Snapshot().State == profile.StateRegistered
 }
 
 // Shutdown signals Run to stop. Safe to call multiple times.

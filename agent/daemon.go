@@ -209,6 +209,12 @@ type translatedSession struct {
 	manager      *translation.Manager
 }
 
+// Connected forwards the wrapped session's Hub connection state.
+func (s translatedSession) Connected() bool {
+	reporter, ok := s.Session.(supervisor.ConnectionReporter)
+	return !ok || reporter.Connected()
+}
+
 func (s translatedSession) Run(ctx context.Context) error {
 	defer s.manager.Deactivate(s.membershipID)
 	return s.Session.Run(ctx)

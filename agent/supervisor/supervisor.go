@@ -53,6 +53,12 @@ func (m Membership) validate() error {
 // profile, WireGuard adapter, node pool, grants, DNS, enforcement, and
 // publications. Run must stop after ctx cancellation. Shutdown must be safe to
 // call more than once.
+// ConnectionReporter is implemented by sessions that know whether they
+// reached their Hub. A running session that has not is listed as starting.
+type ConnectionReporter interface {
+	Connected() bool
+}
+
 type Session interface {
 	Run(context.Context) error
 	Shutdown()
@@ -275,6 +281,10 @@ func (s *Supervisor) Snapshots() []Snapshot {
 			Membership: managed.membership,
 			Status:     managed.status,
 			UpdatedAt:  managed.updatedAt,
+		}
+		if reporter, ok := managed.session.(ConnectionReporter); ok &&
+			snapshot.Status == StatusConnected && !reporter.Connected() {
+			snapshot.Status = StatusStarting
 		}
 		if managed.err != nil {
 			snapshot.Error = managed.err.Error()
