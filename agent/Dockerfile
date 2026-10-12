@@ -1,8 +1,12 @@
-FROM golang:1.25-bookworm AS build
+# Build from the directory that holds the sibling repos the module replaces
+# (channel-go, hub-service-go, hub-net-node, hub-net):
+#   docker build -f hub-net/agent/Dockerfile -t hub-net .
+FROM golang:1.26-bookworm AS build
 
 WORKDIR /src
-COPY hub-net/channel-go /src/hub-net/channel-go
-COPY hub-net/hub-service-go /src/hub-net/hub-service-go
+COPY channel-go /src/channel-go
+COPY hub-service-go /src/hub-service-go
+COPY hub-net-node /src/hub-net-node
 COPY hub-net/agent /src/hub-net/agent
 
 WORKDIR /src/hub-net/agent
@@ -34,4 +38,6 @@ LABEL org.opencontainers.image.title="hub-net" \
 VOLUME ["/var/lib/hub-net"]
 STOPSIGNAL SIGTERM
 ENTRYPOINT ["/usr/local/bin/hub-net"]
-CMD ["-state-dir", "/var/lib/hub-net", "-socket", "/run/hub-net/agent.sock"]
+# The command socket stays in the state dir: /run/hub-net/agent.sock is the
+# local agent socket hub-pro uses to prove the hub host's agent.
+CMD ["-state-dir", "/var/lib/hub-net"]
