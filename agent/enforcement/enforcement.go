@@ -71,10 +71,48 @@ func (m *Manager) ReplaceManual(userID string, sourceAddresses, destinationAddre
 	return nil
 }
 
+// controlResource names the rules AllowControl installs.
+const controlResource = "control:hub-pro"
+
+// AllowControl lets any overlay peer reach TCP port on this host's overlay
+// addresses. The hub host's local agent uses it for hub-pro, which members and
+// joiners reach only through the overlay. It replaces earlier control rules.
+func (m *Manager) AllowControl(destinationAddresses []string, port uint16) error {
+	if port == 0 {
+		return ErrInvalidAuthorization
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	previous := cloneRules(m.rules)
+	for key, rule := range m.rules {
+		if rule.ResourceID == controlResource {
+			delete(m.rules, key)
+		}
+	}
+	for _, value := range destinationAddresses {
+		destination, err := parseOverlayHost(value)
+		if err != nil {
+			continue
+		}
+		rule := Rule{
+			ResourceID: controlResource, ProviderID: "control", Destination: destination,
+			DestinationPort: port, Protocol: "tcp", ExpiresAt: time.Now().AddDate(100, 0, 0),
+		}
+		m.rules[ruleKey(rule)] = rule
+	}
+	if err := m.applyLocked(); err != nil {
+		m.rules = previous
+		return fmt.Errorf("enforcement: allow control port: %w", err)
+	}
+	return nil
+}
+
 var ErrInvalidAuthorization = errors.New("enforcement: invalid authorization")
 var ErrPlatformUnsupported = errors.New("enforcement: platform backend unsupported")
 
 // Rule is the exact signed flow boundary installed in the platform firewall.
+// An invalid (zero) Source matches any overlay source; only control rules use
+// it.
 type Rule struct {
 	ResourceID      string
 	ProviderID      string
@@ -311,7 +349,7 @@ func (b *MemoryBackend) Allowed(protocolName string, source, destination netip.A
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	for _, rule := range b.rules {
-		if rule.Protocol == protocolName && rule.Source == source &&
+		if rule.Protocol == protocolName && (!rule.Source.IsValid() || rule.Source == source) &&
 			rule.Destination == destination && rule.DestinationPort == port &&
 			rule.ExpiresAt.After(now) {
 			return true

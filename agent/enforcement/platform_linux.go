@@ -115,13 +115,25 @@ func buildNFTScript(interfaceName string, rules []Rule, replace bool) string {
 	output.WriteString("table inet " + nftTable + " {\n")
 	output.WriteString(" chain input {\n")
 	output.WriteString("  type filter hook input priority filter; policy accept;\n")
+	// Replies to connections this host opened. Revocation deletes conntrack
+	// entries (TerminateResource), so revoked inbound flows do not survive.
+	fmt.Fprintf(&output, "  iifname %q ct state established,related accept\n", interfaceName)
 
 	sorted := append([]Rule(nil), rules...)
 	sort.Slice(sorted, func(i, j int) bool { return ruleKey(sorted[i]) < ruleKey(sorted[j]) })
 	for _, rule := range sorted {
 		family := "ip"
-		if rule.Source.Is6() {
+		if rule.Destination.Is6() {
 			family = "ip6"
+		}
+		if !rule.Source.IsValid() {
+			fmt.Fprintf(
+				&output,
+				"  iifname %q %s daddr %s %s dport %d accept comment %q\n",
+				interfaceName, family, rule.Destination,
+				rule.Protocol, rule.DestinationPort, rule.ResourceID,
+			)
+			continue
 		}
 		fmt.Fprintf(
 			&output,
