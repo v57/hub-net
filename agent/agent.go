@@ -89,6 +89,8 @@ type Agent struct {
 	enforcementBackend enforcement.Backend
 	production         bool
 	bindingKind        protocol.LocalAgentBindingKind
+	knownAddress       netip.Addr
+	interfaceAddress   netip.Addr
 	// memberProfiles is the latest network/agents/list snapshot and
 	// memberPeers the member WireGuard peers installed from it (hub host
 	// agent only), keyed by base64 WireGuard key. Guarded by mu.
@@ -174,6 +176,10 @@ type Options struct {
 	GatewayAllowed bool
 	// GatewayBackend owns forwarding, firewall, NAT, and flow teardown.
 	GatewayBackend gateway.Backend
+	// OverlayAddress is a joined member's permanent IPv4 overlay address. Such
+	// a member reaches hub-pro only through the tunnel, so the session brings
+	// the interface up with it (and InitialPeers) before connecting.
+	OverlayAddress string
 	// BindingKind is sent with hub/net/bind on every connect. Empty means
 	// "machine": the agent on the same host as hub-pro, proven over the local
 	// agent socket. Memberships created by an invitation join use "join".
@@ -252,6 +258,7 @@ func New(options Options) (*Agent, error) {
 		enforcementBackend: enforcementBackend,
 		production:         options.Production,
 		bindingKind:        options.BindingKind,
+		knownAddress:       parseOptionalAddr(options.OverlayAddress),
 		interfaceName:      interfaceName,
 		initialPeers:       append([]wireguard.PeerConfig(nil), options.InitialPeers...),
 		generations:        make(map[string]uint64),
@@ -729,6 +736,14 @@ func (a *Agent) Run(ctx context.Context) (err error) {
 			}
 		}()
 	}
+	if a.bindingKind == protocol.LocalAgentBindingJoin && a.knownAddress.IsValid() {
+		// hub-pro is reachable only through the overlay; without the tunnel
+		// the first connect (and so the interface setup in OnConnect) never
+		// happens after a restart.
+		if err := a.bringUpInterface(a.knownAddress); err != nil {
+			a.logger.Error("wireguard interface setup failed", slog.String("err", err.Error()))
+		}
+	}
 	if err := svc.Start(); err != nil {
 		ipcCancel()
 		<-ipcErrs
@@ -1102,9 +1117,19 @@ func (a *Agent) configureInterface() error {
 	if !wireguard.IPv4OverlayPrefix.Contains(address) && !wireguard.IPv6OverlayPrefix.Contains(address) {
 		return fmt.Errorf("hubnet: overlay address outside reserved ranges: %s", address)
 	}
+	return a.bringUpInterface(address)
+}
 
+// bringUpInterface starts the WireGuard interface with address and the
+// initial peers. A running interface with the same address is left alone:
+// a joined member's Hub connection runs through it, and tearing it down on
+// every reconnect would cut that connection.
+func (a *Agent) bringUpInterface(address netip.Addr) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	if a.networkUp && a.interfaceAddress == address {
+		return nil
+	}
 	if a.networkUp {
 		if err := a.adapter.Down(); err != nil {
 			return fmt.Errorf("hubnet: replace wireguard interface: %w", err)
@@ -1123,7 +1148,18 @@ func (a *Agent) configureInterface() error {
 		return fmt.Errorf("hubnet: start wireguard interface: %w", err)
 	}
 	a.networkUp = true
+	a.interfaceAddress = address
 	return nil
+}
+
+// parseOptionalAddr parses an address, returning the zero Addr when empty or
+// invalid.
+func parseOptionalAddr(value string) netip.Addr {
+	address, err := netip.ParseAddr(value)
+	if err != nil {
+		return netip.Addr{}
+	}
+	return address
 }
 
 func (a *Agent) stopInterface() error {

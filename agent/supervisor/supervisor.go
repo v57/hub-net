@@ -30,6 +30,7 @@ type Membership struct {
 	InterfaceName    string
 	GatewayAllowed   bool
 	Local            bool
+	OverlayIPv4      string
 }
 
 func (m Membership) validate() error {

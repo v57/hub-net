@@ -488,7 +488,6 @@ waitLoop:
 // already open", breaking joins after the first exchange. The close is
 // best-effort: the session also expires server-side.
 func (c *Client) closeBootstrapSession(conn net.Conn, sessionID string) {
-	_ = conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
 	_ = WriteEnvelope(conn, protocol.Envelope{
 		MajorVersion: protocol.MajorVersion,
 		MinorVersion: protocol.MinorVersion,

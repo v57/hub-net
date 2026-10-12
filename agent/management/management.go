@@ -211,6 +211,7 @@ func toSupervisor(stored membership.Stored) supervisor.Membership {
 		PublicationsPath: stored.Record.PublicationsPath,
 		GatewayAllowed:   stored.Record.GatewayAllowed,
 		Local:            stored.Record.Local,
+		OverlayIPv4:      stored.Record.CanonicalIPv4,
 	}
 }
 

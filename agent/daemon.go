@@ -189,6 +189,7 @@ func (d *Daemon) Restore(store *membership.Store) ([]membership.Diagnostic, erro
 			InterfaceName:    stored.Record.InterfaceName,
 			GatewayAllowed:   stored.Record.GatewayAllowed,
 			Local:            stored.Record.Local,
+			OverlayIPv4:      stored.Record.CanonicalIPv4,
 		}
 		if err := d.Add(record); err != nil {
 			if d.translation != nil {

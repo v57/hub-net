@@ -107,8 +107,16 @@ func normalizeEndpoint(endpoint string) (*url.URL, error) {
 	return target, nil
 }
 
+// envelopeWriteTimeout bounds one envelope write.
+const envelopeWriteTimeout = 10 * time.Second
+
 // WriteEnvelope encodes one protocol envelope as a single masked text frame.
+// Each write gets its own deadline and clears it afterwards: the registration
+// connection lives for hours, and a deadline left behind by one write would
+// fail every later write on it.
 func WriteEnvelope(conn net.Conn, envelope protocol.Envelope) error {
+	_ = conn.SetWriteDeadline(time.Now().Add(envelopeWriteTimeout))
+	defer func() { _ = conn.SetWriteDeadline(time.Time{}) }()
 	payload, err := json.Marshal(envelope)
 	if err != nil {
 		return err

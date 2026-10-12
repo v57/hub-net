@@ -120,6 +120,7 @@ func run(args []string) error {
 		return hubnet.Options{
 			Config: sessionConfig, Logger: logger, Production: true,
 			BindingKind:    bindingKind,
+			OverlayAddress: member.OverlayIPv4,
 			InterfaceName:  member.InterfaceName,
 			InitialShares:  shares,
 			GatewayAllowed: member.GatewayAllowed,
