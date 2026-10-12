@@ -26,6 +26,24 @@ when they need IPC access.
 Agent fails before identity creation and Hub registration when capabilities
 are absent or current platform lacks production tunnel support.
 
+## Hub host
+
+On the machine that runs hub-pro, make this agent the hub's local agent once:
+
+```sh
+hub-net local                    # hub-pro at ws://127.0.0.1:1997
+hub-net local ws://127.0.0.1:2000
+```
+
+hub-pro proves the agent is local over `/run/hub-net/agent.sock`, so the user
+running hub-pro must be in the `hub-net` group (or set `HUB_NET_AGENT_SOCKET`).
+The owner then approves the agent's `net/*` APIs in Hub App (they stay pending
+until then, like any non-owner service). Only this agent issues invitations;
+other machines join with `hub-net join <invite>`.
+
+`hub-net list` shows the session. Without systemd-resolved the tunnel still
+works, but `.hub.invalid` names do not resolve.
+
 ## Ubuntu acceptance
 
 Sync from the Mac source workspace and run all ordinary checks:
