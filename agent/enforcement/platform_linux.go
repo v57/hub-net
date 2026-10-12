@@ -100,7 +100,8 @@ func (b *linuxBackend) TerminateResource(resourceID string) error {
 			"-d", rule.Destination.String(),
 			"--dport", strconv.Itoa(int(rule.DestinationPort)),
 		}
-		if err := b.runner.run("conntrack", args, ""); err != nil {
+		// conntrack exits 1 when no flow matched; nothing to terminate then.
+		if err := b.runner.run("conntrack", args, ""); err != nil && !strings.Contains(err.Error(), "0 flow entries have been deleted") {
 			return err
 		}
 	}

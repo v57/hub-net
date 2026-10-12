@@ -7,6 +7,8 @@
 //	hubctl -hub ws://127.0.0.1:1997 -identity owner.identity invite
 //	hubctl -hub ws://127.0.0.1:1997 -identity owner.identity list
 //	hubctl -hub ws://127.0.0.1:1997 -identity owner.identity approve
+//	hubctl -identity owner.identity agent post net/ports/update '{"update":[{"port":8080}]}'
+//	hubctl -identity owner.identity agent stream net/users
 package main
 
 import (
@@ -38,7 +40,7 @@ func run(args []string) error {
 		return err
 	}
 	if flags.NArg() == 0 {
-		return errors.New("usage: hubctl [flags] key | node-set <endpoint> | invite | list | approve")
+		return errors.New("usage: hubctl [flags] key | node-set <endpoint> | invite | list | approve | agent post|stream <path> [json]")
 	}
 	id, err := loadOrCreate(*identityPath)
 	if err != nil {
@@ -81,6 +83,38 @@ func run(args []string) error {
 		return nil
 	case "approve":
 		return approvePending(ctx, svc)
+	case "agent":
+		// Calls the hub's local agent the way Hub App does: routed by
+		// context.service to the provider on the hub's machine.
+		if flags.NArg() < 3 {
+			return errors.New("usage: hubctl agent post|stream <path> [json]")
+		}
+		var body any
+		if flags.NArg() > 3 {
+			if err := json.Unmarshal([]byte(flags.Arg(3)), &body); err != nil {
+				return fmt.Errorf("body: %w", err)
+			}
+		}
+		provider, err := localProvider(ctx, svc)
+		if err != nil {
+			return err
+		}
+		route := map[string]any{"service": provider}
+		var value any
+		switch flags.Arg(1) {
+		case "post":
+			value, err = svc.Send(flags.Arg(2), body, route)
+		case "stream":
+			value, err = hubservice.OneValueTyped[any](ctx, svc, flags.Arg(2), body, route)
+		default:
+			return fmt.Errorf("unknown agent call %q", flags.Arg(1))
+		}
+		if err != nil {
+			return err
+		}
+		encoded, _ := json.Marshal(value)
+		fmt.Println(string(encoded))
+		return nil
 	case "invite":
 		provider, err := localProvider(ctx, svc)
 		if err != nil {

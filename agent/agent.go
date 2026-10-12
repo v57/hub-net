@@ -832,6 +832,9 @@ func (a *Agent) syncMemberPeers(ctx context.Context, profiles []protocol.AgentPr
 		if profile.Key == "" || profile.Key == self || profile.WireGuardKey == "" {
 			continue
 		}
+		if !a.netUsers.Exists(profile.Key) {
+			continue // revoked with net/revoke
+		}
 		key, err := base64.StdEncoding.DecodeString(profile.WireGuardKey)
 		if err != nil || len(key) != 32 {
 			continue

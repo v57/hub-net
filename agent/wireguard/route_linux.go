@@ -211,8 +211,16 @@ func decodeRouteAddr(family uint8, payload []byte) netip.Addr {
 // leftover route the previous agent process bound to the same interface is
 // co-opted rather than treated as a foreign conflict. Used by Up after device
 // configuration succeeds. Caller MUST hold a.mu.
-func (a *linuxAdapter) installOverlayRouteLocked(prefix netip.Prefix, ifIndex int32) error {
+//
+// source, when valid and inside prefix, becomes the route's preferred source
+// (RTA_PREFSRC): the interface can still carry a joiner's temporary bootstrap
+// address, and overlay traffic must leave from the permanent one that peers
+// and port grants know.
+func (a *linuxAdapter) installOverlayRouteLocked(prefix netip.Prefix, ifIndex int32, source netip.Addr) error {
 	msg := buildRouteMessage(unix.RTM_NEWROUTE, prefix, ifIndex, unix.NLM_F_REPLACE)
+	if source.IsValid() && prefix.Contains(source) {
+		msg = appendRouteAttr(msg, unix.RTA_PREFSRC, routeAddrBytes(source))
+	}
 	return a.sendRecvRouteAck(msg, fmt.Sprintf("install route %s", prefix))
 }
 
@@ -278,6 +286,14 @@ func buildRouteMessage(msgType uint16, prefix netip.Prefix, ifIndex int32, extra
 	w := newNlmsgWriter(hdr)
 	w.PutBytes(unix.RTA_DST, routeAddrBytes(prefix.Addr()))
 	w.PutUint32(unix.RTA_OIF, uint32(ifIndex))
+	return w.Bytes()
+}
+
+// appendRouteAttr appends one rtattr to a route message and fixes up the
+// netlink header length.
+func appendRouteAttr(msg []byte, attrType uint16, payload []byte) []byte {
+	w := newNlmsgWriter(msg)
+	w.PutBytes(attrType, payload)
 	return w.Bytes()
 }
 

@@ -176,7 +176,7 @@ func (a *linuxAdapter) Up(config InterfaceConfig) error {
 	}
 	installed := make([]netip.Prefix, 0, 2)
 	for _, route := range OverlayRoutes() {
-		if err := a.installOverlayRouteLocked(route, idx); err != nil {
+		if err := a.installOverlayRouteLocked(route, idx, config.Address); err != nil {
 			// Roll back the routes we did install, then drop the interface.
 			for _, done := range installed {
 				_ = a.uninstallOverlayRouteLocked(done, idx)

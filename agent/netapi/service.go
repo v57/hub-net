@@ -262,7 +262,12 @@ func users(o Options) []NetUser {
 				break
 			}
 		}
-		out = append(out, NetUser{ID: id, IP: ip, LastUsed: u.LastUsed, Online: u.Online, TCP: ports.TCP, UDP: ports.UDP})
+		lastUsed := u.LastUsed
+		if lastUsed.IsZero() {
+			// hub-pro reports when the member last connected.
+			lastUsed, _ = time.Parse(time.RFC3339Nano, p.ConnectedAt)
+		}
+		out = append(out, NetUser{ID: id, IP: ip, LastUsed: lastUsed, Online: p.Online || u.Online, TCP: ports.TCP, UDP: ports.UDP})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
 	return out

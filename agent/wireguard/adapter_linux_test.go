@@ -536,3 +536,32 @@ func probeUpSocket(a *linuxAdapter) error {
 	a.familyID = fid
 	return nil
 }
+
+// TestRoutePreferredSource pins RTA_PREFSRC on an overlay route: members keep
+// a temporary bootstrap address on the interface, and overlay traffic must use
+// the permanent one.
+func TestRoutePreferredSource(t *testing.T) {
+	source := netip.MustParseAddr("100.96.0.2")
+	msg := appendRouteAttr(buildRouteMessage(unix.RTM_NEWROUTE, IPv4OverlayPrefix, 42, unix.NLM_F_REPLACE), unix.RTA_PREFSRC, routeAddrBytes(source))
+	_, _, body, err := parseNlmsghdr(msg)
+	if err != nil {
+		t.Fatalf("parseNlmsghdr: %v", err)
+	}
+	if got := binary.LittleEndian.Uint32(msg); int(got) != len(msg) {
+		t.Fatalf("nlmsg length = %d, want %d", got, len(msg))
+	}
+	r := newNlmsgReader(body, sizeofRtmsg)
+	for {
+		at, payload, ok := r.Next()
+		if !ok {
+			break
+		}
+		if at == unix.RTA_PREFSRC {
+			if got := decodeRouteAddr(unix.AF_INET, payload); got != source {
+				t.Fatalf("RTA_PREFSRC = %s, want %s", got, source)
+			}
+			return
+		}
+	}
+	t.Fatal("RTA_PREFSRC missing")
+}
