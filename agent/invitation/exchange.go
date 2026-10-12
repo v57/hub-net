@@ -75,9 +75,17 @@ func Exchange(ctx context.Context, address *net.UDPAddr, request protocol.Direct
 		return protocol.DirectBootstrapResponse{}, err
 	}
 
-	conn, err := net.DialUDP("udp", nil, address)
+	// An unconnected socket: an inviter on a multi-homed host (Docker bridges,
+	// VPNs, several interfaces) may answer from another of its addresses, and
+	// a connected socket would drop that reply. The response is signed by the
+	// invitation key and checked below, so its source address is not trusted.
+	network := "udp4"
+	if address.IP.To4() == nil {
+		network = "udp6"
+	}
+	conn, err := net.ListenUDP(network, nil)
 	if err != nil {
-		return protocol.DirectBootstrapResponse{}, fmt.Errorf("invitation: dial bootstrap listener %s: %w", address, err)
+		return protocol.DirectBootstrapResponse{}, fmt.Errorf("invitation: open bootstrap socket: %w", err)
 	}
 	defer conn.Close()
 
@@ -95,14 +103,14 @@ func Exchange(ctx context.Context, address *net.UDPAddr, request protocol.Direct
 			}
 		}
 		_ = conn.SetWriteDeadline(time.Now().Add(timeout))
-		if _, err := conn.Write(frame); err != nil {
+		if _, err := conn.WriteToUDP(frame, address); err != nil {
 			lastErr = err
 			continue
 		}
 		_ = conn.SetReadDeadline(time.Now().Add(timeout))
 		buffer := make([]byte, MaxBootstrapFrameBytes)
 		for {
-			n, err := conn.Read(buffer)
+			n, source, err := conn.ReadFromUDP(buffer)
 			if err != nil {
 				var netErr net.Error
 				if errors.As(err, &netErr) && netErr.Timeout() {
@@ -129,6 +137,11 @@ func Exchange(ctx context.Context, address *net.UDPAddr, request protocol.Direct
 				}
 				return response, nil
 			case FrameError:
+				// Error frames are unsigned: only the inviter's own address
+				// may end the exchange with one.
+				if !source.IP.Equal(address.IP) {
+					continue
+				}
 				var networkError protocol.NetworkError
 				if err := decodeNetworkError(reply.Payload, &networkError); err != nil {
 					continue
