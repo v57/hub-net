@@ -184,7 +184,6 @@ func TestClientRegistrationEnablesAndDisablesJoins(t *testing.T) {
 		t.Fatal(err)
 	}
 	code, digest := signedInvitation(t, id)
-	key := serviceKey(t, id)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -200,7 +199,7 @@ func TestClientRegistrationEnablesAndDisablesJoins(t *testing.T) {
 	go func() { done <- client.Run(ctx) }()
 	waitOnline(t, client)
 
-	reply := openInvitationSession(t, address, code, digest, key)
+	reply := openInvitationSession(t, address, code, digest, "joiner-online")
 	if reply.Type != protocol.MessageSessionOpened || reply.SessionID == "" {
 		t.Fatalf("online join = %+v, want session.opened", reply)
 	}
