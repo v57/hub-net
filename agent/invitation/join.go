@@ -466,12 +466,22 @@ func rendezvous(ctx context.Context, wsURL, code, key, replayID, expectedKey str
 		return rendezvousPeer{}, fmt.Errorf("invitation: candidate.offer: %w", err)
 	}
 
+	// The node pushes a list with only the inviter's observed endpoint as soon
+	// as the sessions pair; the inviter's declared candidates (its advertised
+	// address, e.g. behind port forwarding) follow with its offer. Wait a
+	// moment for them before settling for the observed endpoint.
+	var observedOnly *rendezvousPeer
+	deadline := now.Add(joinTimeout)
 	for {
-		if err := conn.SetReadDeadline(now.Add(joinTimeout)); err != nil {
+		if err := conn.SetReadDeadline(deadline); err != nil {
 			return rendezvousPeer{}, err
 		}
 		reply, err := nodeclient.ReadEnvelope(conn)
 		if err != nil {
+			var netErr net.Error
+			if observedOnly != nil && errors.As(err, &netErr) && netErr.Timeout() {
+				return *observedOnly, nil
+			}
 			return rendezvousPeer{}, fmt.Errorf("invitation: candidate.list: %w", err)
 		}
 		if reply.Type == nodeprotocol.MessageError {
@@ -491,9 +501,20 @@ func rendezvous(ctx context.Context, wsURL, code, key, replayID, expectedKey str
 				usable = append(usable, c)
 			}
 		}
-		return rendezvousPeer{Candidates: usable, Observed: observed}, nil
+		peer := rendezvousPeer{Candidates: usable, Observed: observed}
+		if len(usable) > 0 {
+			return peer, nil
+		}
+		if observedOnly == nil {
+			observedOnly = &peer
+			deadline = time.Now().Add(candidateWait)
+		}
 	}
 }
+
+// candidateWait bounds how long a joiner waits for the inviter's declared
+// candidates after the node paired the sessions.
+const candidateWait = 3 * time.Second
 
 // buildJoinRequest constructs and signs the joiner's direct bootstrap request.
 func buildJoinRequest(replayID, serviceKey, wireGuardKey string, privateKey ed25519.PrivateKey, now time.Time) (protocol.DirectBootstrapRequest, error) {

@@ -22,6 +22,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"sync"
@@ -95,7 +96,7 @@ func NewListener(options ListenerOptions) (*Listener, error) {
 	}
 	logger := options.Logger
 	if logger == nil {
-		logger = slog.New(slog.NewTextHandler(nil, nil))
+		logger = slog.New(slog.NewTextHandler(io.Discard, nil))
 	}
 	maxConcurrent := options.MaxConcurrent
 	if maxConcurrent <= 0 {
@@ -299,12 +300,14 @@ func (l *Listener) handle(ctx context.Context, address *net.UDPAddr, requestID [
 	defer cancel()
 	response, err := l.inviter.Handle(handleCtx, request)
 	if err != nil {
+		l.logger.Info("bootstrap request rejected", slog.String("from", address.String()), slog.String("err", err.Error()))
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			return
 		}
 		l.writeError(address, requestID, bootstrapNetworkError(err))
 		return
 	}
+	l.logger.Info("bootstrap request answered", slog.String("from", address.String()))
 	payload, err := encodeResponsePayload(response)
 	if err != nil {
 		l.writeError(address, requestID, bootstrapNetworkError(err))

@@ -516,7 +516,7 @@ func (a *Agent) Run(ctx context.Context) (err error) {
 				CandidateID: "inviter-bootstrap",
 				Kind:        "host",
 				Transport:   "udp",
-				Address:     address.IP.String(),
+				Address:     a.advertisedAddress(address.IP),
 				Port:        uint16(address.Port),
 				Priority:    100,
 			}}
@@ -574,7 +574,7 @@ func (a *Agent) Run(ctx context.Context) (err error) {
 				port = state.ListenPort
 			}
 			return []protocol.BootstrapEndpoint{{
-				Address: address.IP.String(), Port: port, Transport: "udp",
+				Address: a.advertisedAddress(address.IP), Port: port, Transport: "udp",
 			}}
 		},
 		HubProHost: func() string {
@@ -910,6 +910,15 @@ func overlayPrefixes(addresses []string) []netip.Prefix {
 		}
 	}
 	return prefixes
+}
+
+// advertisedAddress is the address joiners are told to use for this inviter:
+// the configured AdvertiseAddress, else the listener's own address.
+func (a *Agent) advertisedAddress(listener net.IP) string {
+	if a.config.AdvertiseAddress != "" {
+		return a.config.AdvertiseAddress
+	}
+	return listener.String()
 }
 
 // allowHubControl opens hub-pro's port on this host's overlay address when

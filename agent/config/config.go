@@ -90,6 +90,11 @@ type Config struct {
 	// without a fixed port. Empty defaults to ":0" (all interfaces, ephemeral
 	// port).
 	BootstrapListenAddress string `json:"bootstrapListenAddress,omitempty"`
+	// AdvertiseAddress is the address joiners use to reach this inviter's
+	// bootstrap listener and WireGuard port, for a host behind NAT or port
+	// forwarding. Empty advertises the listener's own address; joiners fall
+	// back to the node-observed one when that is unspecified.
+	AdvertiseAddress string `json:"advertiseAddress,omitempty"`
 	// AttestationTTL is how long issued attestations remain valid. Must stay
 	// short; Hub re-checks on every share registration.
 	AttestationTTL time.Duration `json:"attestationTtl,omitempty"`

@@ -24,6 +24,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"strings"
@@ -151,7 +152,7 @@ func New(options Options) (*Client, error) {
 	}
 	logger := options.Logger
 	if logger == nil {
-		logger = slog.New(slog.NewTextHandler(nil, nil))
+		logger = slog.New(slog.NewTextHandler(io.Discard, nil))
 	}
 	now := options.Now
 	if now == nil {
