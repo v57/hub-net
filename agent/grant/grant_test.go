@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
+	protocol "github.com/v57/hub-net-node/models"
 	"github.com/v57/hub-net/wireguard"
-	"github.com/v57/hub-service-go/protocol"
 )
 
 func TestConfigureOutboundBindsAuthorizedPeer(t *testing.T) {

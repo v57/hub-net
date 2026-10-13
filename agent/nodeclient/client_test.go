@@ -19,10 +19,10 @@ import (
 	"time"
 
 	"github.com/v57/hub-net-node/config"
+	"github.com/v57/hub-net-node/identity"
+	network "github.com/v57/hub-net-node/models"
 	"github.com/v57/hub-net-node/protocol"
 	"github.com/v57/hub-net-node/server"
-	"github.com/v57/hub-service-go/identity"
-	network "github.com/v57/hub-service-go/protocol"
 )
 
 // runNodeServer boots a real hub-net-node rendezvous server on a random

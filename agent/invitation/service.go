@@ -10,9 +10,8 @@ import (
 	"time"
 
 	"github.com/v57/channel-go/channelgo"
-	hubservice "github.com/v57/hub-service-go"
-	"github.com/v57/hub-service-go/identity"
-	"github.com/v57/hub-service-go/service"
+	"github.com/v57/hub-net-node/identity"
+	"github.com/v57/hub-net/hubconn"
 )
 
 const InvitePath = "net/invite"
@@ -24,7 +23,7 @@ const inviteOnlineWait = 10 * time.Second
 // RegisterInviteService exposes agent-owned compact invitation creation.
 // online reports whether the agent is registered with hub-net-node as an
 // inviter; the node rejects joins while it is not, so no code is issued then.
-func RegisterInviteService(svc *hubservice.Service, id *identity.Identity, endpoint func() string, online func() bool) error {
+func RegisterInviteService(svc *hubconn.Service, id *identity.Identity, endpoint func() string, online func() bool) error {
 	if svc == nil || id == nil || online == nil {
 		return fmt.Errorf("invitation: service, identity and online state required")
 	}
@@ -36,7 +35,7 @@ func RegisterInviteService(svc *hubservice.Service, id *identity.Identity, endpo
 			time.Sleep(100 * time.Millisecond)
 		}
 		return CreateCode(id, endpoint())
-	}, service.Settings{Permissions: &service.Permissions{
+	}, hubconn.Settings{Permissions: &hubconn.Permissions{
 		Group: "Hub Network", Name: "Invite to Hub Net",
 	}})
 	return nil

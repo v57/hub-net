@@ -13,8 +13,8 @@ import (
 	"testing"
 	"time"
 
+	protocol "github.com/v57/hub-net-node/models"
 	"github.com/v57/hub-net/e2e"
-	"github.com/v57/hub-service-go/protocol"
 )
 
 // TestE2EAuthorizedTCPShare drives the full local authorization chain for a
@@ -181,7 +181,7 @@ func TestE2EBlockedPortRejectsAcrossLayers(t *testing.T) {
 // providerAttestation performs the real local-agent IPC attestation flow over
 // the provider's Unix socket: POST /challenge, sign the nonce with the
 // provider's Hub identity, POST /attest. This is the wire path the
-// hub-service-go network.Publisher uses in production.
+// hubconn/network Publisher uses in production.
 func providerAttestation(t *testing.T, side *e2e.Side, shareName, protocolName, host string, port uint16) protocol.AgentAttestation {
 	t.Helper()
 	challengeBody := map[string]any{

@@ -41,13 +41,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/v57/hub-net-node/identity"
+	protocol "github.com/v57/hub-net-node/models"
 	"github.com/v57/hub-net/connection"
 	"github.com/v57/hub-net/enforcement"
 	"github.com/v57/hub-net/grant"
 	"github.com/v57/hub-net/ipc"
 	"github.com/v57/hub-net/wireguard"
-	"github.com/v57/hub-service-go/identity"
-	"github.com/v57/hub-service-go/protocol"
 )
 
 // ErrDirectFailed mirrors connection.ErrDirectFailed so tests can assert the
@@ -300,7 +300,7 @@ func mustConnectionManager(s *Side) *connection.Manager {
 }
 
 // SocketPath returns the real Unix socket path the side's IPC server listens
-// on. The hub-service-go Publisher reaches the agent through this path.
+// on. The hubconn/network Publisher reaches the agent through this path.
 func (s *Side) SocketPath() string { return s.socket }
 
 // Allowed reports whether the enforcement backend would admit the signed

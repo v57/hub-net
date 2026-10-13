@@ -1,5 +1,5 @@
 // server.go implements the local IPC transport: an HTTP server bound to a
-// Unix-domain socket. The hub-service-go Publisher (and the Bun/Swift
+// Unix-domain socket. The hubconn/network Publisher (and the Bun/Swift
 // clients) POST JSON to /challenge, /attest, /status over the socket; this
 // file decodes those requests, dispatches to the Handler, and writes the
 // wire-level response or error envelope.
@@ -416,7 +416,7 @@ func writeJSON(w http.ResponseWriter, status int, payload any) {
 //
 //	{"error":{"code":"...","message":"..."}}
 //
-// The hub-service-go Publisher only reads the response text on non-2xx and
+// The hubconn/network Publisher only reads the response text on non-2xx and
 // includes it in the LocalAgentError message, so the structured envelope is
 // primarily for richer clients (Hub App diagnostics, future revisions).
 func writeError(w http.ResponseWriter, status int, code, message string) {

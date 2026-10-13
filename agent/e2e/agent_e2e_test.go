@@ -16,14 +16,14 @@ import (
 
 	"github.com/v57/channel-go/channelgo"
 	hubnet "github.com/v57/hub-net"
+	"github.com/v57/hub-net-node/identity"
+	protocol "github.com/v57/hub-net-node/models"
 	"github.com/v57/hub-net/config"
 	"github.com/v57/hub-net/enforcement"
+	"github.com/v57/hub-net/hubconn"
+	servicenetwork "github.com/v57/hub-net/hubconn/network"
 	"github.com/v57/hub-net/profile"
 	"github.com/v57/hub-net/wireguard"
-	hubservice "github.com/v57/hub-service-go"
-	"github.com/v57/hub-service-go/identity"
-	servicenetwork "github.com/v57/hub-service-go/network"
-	"github.com/v57/hub-service-go/protocol"
 )
 
 // agentSide wraps a running hubnet.Agent plus the helpers the agent-level
@@ -162,7 +162,7 @@ func (s *agentSide) bringAdapterUp(t *testing.T, name string) {
 // the agent's profile:
 //  1. obtain a signed AgentAttestation from the agent's own IPC server
 //     (/challenge then /attest), signing the nonce with the agent's Hub
-//     identity exactly as the hub-service-go network.Publisher does;
+//     identity exactly as the hubconn/network Publisher does;
 //  2. send network/shares/replace through the agent's Hub sender with the
 //     attestation embedded, exactly as the Publisher does.
 //
@@ -622,18 +622,16 @@ func TestAgentE2EManualTCPUDPServiceRepublishesAfterHubRestart(t *testing.T) {
 	if err != nil {
 		t.Fatalf("service public key: %v", err)
 	}
-	publisher := servicenetwork.New(servicenetwork.Options{
-		AgentSocket: provider.cfg.AgentSocketPath,
-	})
-	service, err := hubservice.New(hubservice.Options{
-		Identity: serviceIdentity,
-		Address:  hub.Port(),
-		Name:     "manual-game-server",
-		Network:  publisher,
+	service, err := hubconn.New(hubconn.Options{
+		Identity:       serviceIdentity,
+		Address:        hub.Port(),
+		Name:           "manual-game-server",
+		NetworkOptions: servicenetwork.Options{AgentSocket: provider.cfg.AgentSocketPath},
 	})
 	if err != nil {
 		t.Fatalf("new manual service: %v", err)
 	}
+	publisher := service.Network()
 	policy := &servicenetwork.Policy{Mode: servicenetwork.PolicyHub}
 	const (
 		tcpShare = "manual-game-tcp"
@@ -747,7 +745,7 @@ func providerKey(t *testing.T, s *agentSide) string {
 
 // agentSelfAttestation performs the IPC attestation flow against the agent's
 // own Unix socket using its own Hub identity as the service identity. Mirrors
-// the hub-service-go network.Publisher wire path.
+// the hubconn/network Publisher wire path.
 func agentSelfAttestation(t *testing.T, socketPath string, id *identity.Identity, shareName, proto, host string, port uint16) protocol.AgentAttestation {
 	t.Helper()
 	serviceKey, err := id.PublicKeyBase64()

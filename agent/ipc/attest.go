@@ -30,8 +30,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/v57/hub-service-go/identity"
-	"github.com/v57/hub-service-go/protocol"
+	"github.com/v57/hub-net-node/identity"
+	protocol "github.com/v57/hub-net-node/models"
 )
 
 // ChallengeTTL bounds how long a nonce may be redeemed. Must stay short so a

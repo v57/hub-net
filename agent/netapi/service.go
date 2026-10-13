@@ -11,9 +11,8 @@ import (
 	"time"
 
 	"github.com/v57/channel-go/channelgo"
-	hubservice "github.com/v57/hub-service-go"
-	"github.com/v57/hub-service-go/protocol"
-	"github.com/v57/hub-service-go/service"
+	protocol "github.com/v57/hub-net-node/models"
+	"github.com/v57/hub-net/hubconn"
 )
 
 const (
@@ -156,12 +155,12 @@ type Options struct {
 	RevokePeer     func(protocol.AgentProfile) error
 }
 
-func Register(svc *hubservice.Service, options Options) error {
+func Register(svc *hubconn.Service, options Options) error {
 	if svc == nil || options.Store == nil || options.Registry == nil {
 		return errors.New("netapi: incomplete options")
 	}
-	permission := func(name string) service.Settings {
-		return service.Settings{Permissions: &service.Permissions{Group: "Hub Network", Name: name}}
+	permission := func(name string) hubconn.Settings {
+		return hubconn.Settings{Permissions: &hubconn.Permissions{Group: "Hub Network", Name: name}}
 	}
 	svc.Post(PortsUpdatePath, func(body channelgo.Body) (any, error) {
 		var request UpdatePorts

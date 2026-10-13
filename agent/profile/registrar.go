@@ -18,7 +18,7 @@ import (
 	"time"
 
 	"github.com/v57/channel-go/channelgo"
-	"github.com/v57/hub-service-go/protocol"
+	protocol "github.com/v57/hub-net-node/models"
 )
 
 // DefaultRegistrationTimeout bounds the synchronous register call. The Hub
@@ -144,7 +144,7 @@ func (r *Registrar) Register(ctx context.Context, sender *channelgo.Sender) erro
 
 // OnConnect returns a channelgo-compatible callback that performs Register
 // with the configured timeout. It is the hook installed as
-// hubservice.Options.OnConnect so the agent re-registers on every reconnect.
+// hubconn.Options.OnConnect so the agent re-registers on every reconnect.
 func (r *Registrar) OnConnect() func(sender *channelgo.Sender) {
 	return func(sender *channelgo.Sender) {
 		// Errors are surfaced through profile state; the SDK never aborts the

@@ -20,8 +20,8 @@ import (
 	"os"
 	"time"
 
-	hubservice "github.com/v57/hub-service-go"
-	"github.com/v57/hub-service-go/identity"
+	"github.com/v57/hub-net-node/identity"
+	"github.com/v57/hub-net/hubconn"
 )
 
 func main() {
@@ -57,7 +57,7 @@ func run(args []string) error {
 
 	ctx, cancel := context.WithTimeout(context.Background(), *timeout)
 	defer cancel()
-	svc, err := hubservice.New(hubservice.Options{Address: *hub, Identity: id, Name: "hubctl"})
+	svc, err := hubconn.New(hubconn.Options{Address: *hub, Identity: id, Name: "hubctl"})
 	if err != nil {
 		return err
 	}
@@ -74,7 +74,7 @@ func run(args []string) error {
 		_, err := svc.Send("hub/net/node/set", flags.Arg(1))
 		return err
 	case "list":
-		list, err := hubservice.OneValueTyped[any](ctx, svc, "hub/net/list", nil)
+		list, err := hubconn.OneValueTyped[any](ctx, svc, "hub/net/list", nil)
 		if err != nil {
 			return err
 		}
@@ -105,7 +105,7 @@ func run(args []string) error {
 		case "post":
 			value, err = svc.Send(flags.Arg(2), body, route)
 		case "stream":
-			value, err = hubservice.OneValueTyped[any](ctx, svc, flags.Arg(2), body, route)
+			value, err = hubconn.OneValueTyped[any](ctx, svc, flags.Arg(2), body, route)
 		default:
 			return fmt.Errorf("unknown agent call %q", flags.Arg(1))
 		}
@@ -120,7 +120,7 @@ func run(args []string) error {
 		if err != nil {
 			return err
 		}
-		code, err := hubservice.SendTyped[string](svc, "net/invite", nil, map[string]any{"service": provider})
+		code, err := hubconn.SendTyped[string](svc, "net/invite", nil, map[string]any{"service": provider})
 		if err != nil {
 			return err
 		}
@@ -133,13 +133,13 @@ func run(args []string) error {
 
 // localProvider waits for the net/invite provider running on the hub's own
 // machine (hub/net/list reports it as 127.0.0.1), as the invite UI does.
-func localProvider(ctx context.Context, svc *hubservice.Service) (string, error) {
+func localProvider(ctx context.Context, svc *hubconn.Service) (string, error) {
 	type hubNetInfo struct {
 		ID      string `json:"id"`
 		LocalIP string `json:"localIp"`
 	}
 	for {
-		list, err := hubservice.OneValueTyped[[]hubNetInfo](ctx, svc, "hub/net/list", nil)
+		list, err := hubconn.OneValueTyped[[]hubNetInfo](ctx, svc, "hub/net/list", nil)
 		if err == nil {
 			for _, info := range list {
 				if info.LocalIP == "127.0.0.1" {
@@ -157,9 +157,9 @@ func localProvider(ctx context.Context, svc *hubservice.Service) (string, error)
 
 // approvePending waits for services asking to host APIs (hub/host/pending) and
 // allows every requested path, as the owner does in Hub App.
-func approvePending(ctx context.Context, svc *hubservice.Service) error {
+func approvePending(ctx context.Context, svc *hubconn.Service) error {
 	for {
-		pending, err := hubservice.OneValueTyped[map[string][]string](ctx, svc, "hub/host/pending", nil)
+		pending, err := hubconn.OneValueTyped[map[string][]string](ctx, svc, "hub/host/pending", nil)
 		if err == nil && len(pending) > 0 {
 			for key, paths := range pending {
 				if _, err := svc.Send("hub/host/update", map[string]any{"key": key, "allow": paths}); err != nil {

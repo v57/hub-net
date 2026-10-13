@@ -2,7 +2,8 @@
 
 Local Hub Network agent. Owns WireGuard, scoped routes, split DNS, and the
 local IPC server that issues share attestations. Implemented in Go on top of
-`hub-service-go`.
+`hub-service-go` (wrapped by `hubconn`, which adds identity signing and share
+publication) and the `hub-net-node` identity and wire models.
 
 ## Status
 
@@ -82,8 +83,9 @@ Package installs dedicated-user systemd service with only `CAP_NET_ADMIN` and
 `CAP_NET_RAW`, plus sysusers/tmpfiles definitions for `/var/lib/hub-net` and
 `/run/hub-net`. See `packaging/linux/README.md`.
 
-`hub-service-go` and `channel-go` are wired through local `replace` directives
-until the monorepo publishes tagged module versions (mirrors HN-056/HN-078).
+`channel-go`, `hub-service-go` and `hub-net-node` are wired through local
+`replace` directives to their `~/Developer/Hub` clones (`Channel/`,
+`HubService/`, `Network/`).
 
 ## Key separation
 

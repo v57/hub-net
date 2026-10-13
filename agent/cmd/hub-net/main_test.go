@@ -4,9 +4,9 @@ import (
 	"context"
 	"testing"
 
+	"github.com/v57/hub-net-node/identity"
 	"github.com/v57/hub-net/invitation"
 	"github.com/v57/hub-net/membership"
-	"github.com/v57/hub-service-go/identity"
 )
 
 func TestNextFreeInterface(t *testing.T) {

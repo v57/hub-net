@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "code": "invalid_request",
+  "message": "Malformed request payload",
+  "retryable": false,
+  "details": {
+    "field": "tokenId"
+  }
+}

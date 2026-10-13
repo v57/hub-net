@@ -17,8 +17,11 @@ import (
 	"time"
 
 	hubnet "github.com/v57/hub-net"
+	"github.com/v57/hub-net-node/identity"
+	protocol "github.com/v57/hub-net-node/models"
 	"github.com/v57/hub-net/config"
 	"github.com/v57/hub-net/hubalias"
+	"github.com/v57/hub-net/hubconn"
 	"github.com/v57/hub-net/invitation"
 	"github.com/v57/hub-net/logging"
 	"github.com/v57/hub-net/management"
@@ -26,9 +29,6 @@ import (
 	"github.com/v57/hub-net/publications"
 	"github.com/v57/hub-net/supervisor"
 	"github.com/v57/hub-net/wireguard"
-	hubservice "github.com/v57/hub-service-go"
-	"github.com/v57/hub-service-go/identity"
-	"github.com/v57/hub-service-go/protocol"
 )
 
 var buildVersion = "dev"
@@ -324,7 +324,7 @@ func newLocal(store *membership.Store) management.LocalFunc {
 func hubHeaderName(ctx context.Context, address string, id *identity.Identity) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	svc, err := hubservice.New(hubservice.Options{Address: address, Identity: id, Name: "hub-net"})
+	svc, err := hubconn.New(hubconn.Options{Address: address, Identity: id, Name: "hub-net"})
 	if err != nil {
 		return "", err
 	}
@@ -332,7 +332,7 @@ func hubHeaderName(ctx context.Context, address string, id *identity.Identity) (
 		return "", err
 	}
 	defer svc.Stop()
-	header, err := hubservice.OneValueTyped[struct {
+	header, err := hubconn.OneValueTyped[struct {
 		Name string `json:"name"`
 	}](ctx, svc, "hub/header", nil)
 	if err != nil {

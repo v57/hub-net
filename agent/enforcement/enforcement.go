@@ -11,7 +11,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/v57/hub-service-go/protocol"
+	protocol "github.com/v57/hub-net-node/models"
 )
 
 type ManualPorts struct{ TCP, UDP []uint16 }

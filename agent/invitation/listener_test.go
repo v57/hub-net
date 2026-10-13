@@ -11,9 +11,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/v57/hub-net-node/identity"
+	protocol "github.com/v57/hub-net-node/models"
 	nodeprotocol "github.com/v57/hub-net-node/protocol"
-	"github.com/v57/hub-service-go/identity"
-	"github.com/v57/hub-service-go/protocol"
 )
 
 func testLogger() *slog.Logger {

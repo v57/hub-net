@@ -35,12 +35,12 @@ import (
 	"time"
 
 	"github.com/v57/channel-go/channelgo"
+	"github.com/v57/hub-net-node/identity"
+	protocol "github.com/v57/hub-net-node/models"
 	nodeprotocol "github.com/v57/hub-net-node/protocol"
+	"github.com/v57/hub-net/hubconn"
 	"github.com/v57/hub-net/nodeclient"
 	"github.com/v57/hub-net/wireguard"
-	hubservice "github.com/v57/hub-service-go"
-	"github.com/v57/hub-service-go/identity"
-	"github.com/v57/hub-service-go/protocol"
 )
 
 // joinTimeout bounds the rendezvous phase (probe, session pairing, candidate
@@ -730,7 +730,7 @@ type hubServiceBinder struct{}
 func (hubServiceBinder) Bind(ctx context.Context, address any, id *identity.Identity, wireGuardKey, name string, admission protocol.DirectBootstrapResponse) (BindResult, error) {
 	ready := make(chan struct{})
 	var once sync.Once
-	svc, err := hubservice.New(hubservice.Options{
+	svc, err := hubconn.New(hubconn.Options{
 		Address:  address,
 		Identity: id,
 		Name:     name,
@@ -759,14 +759,14 @@ func (hubServiceBinder) Bind(ctx context.Context, address any, id *identity.Iden
 		BindingKind: protocol.LocalAgentBindingJoin,
 		Admission:   &admission,
 	}
-	registered, err := hubservice.SendTyped[bindResponse](svc, "hub/net/bind", body)
+	registered, err := hubconn.SendTyped[bindResponse](svc, "hub/net/bind", body)
 	if err != nil {
 		return BindResult{}, err
 	}
 	if registered.Profile.Key == "" {
 		return BindResult{}, errors.New("hub/net/bind returned no profile")
 	}
-	header, err := hubservice.OneValueTyped[hubHeader](ctx, svc, "hub/header", nil)
+	header, err := hubconn.OneValueTyped[hubHeader](ctx, svc, "hub/header", nil)
 	if err != nil {
 		return BindResult{}, err
 	}

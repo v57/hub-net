@@ -16,8 +16,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/v57/hub-service-go/identity"
-	"github.com/v57/hub-service-go/protocol"
+	"github.com/v57/hub-net-node/identity"
+	protocol "github.com/v57/hub-net-node/models"
 )
 
 // newTestServer spins up a socket-bound Server backed by a real AttestHandler
@@ -91,7 +91,7 @@ func waitForBind(server *Server) bool {
 	return false
 }
 
-// attestationFlow mirrors the hub-service-go Publisher.requestAttestation wire
+// attestationFlow mirrors the hubconn/network Publisher.requestAttestation wire
 // contract (Bun, Swift, and Go clients all send the same shapes): POST
 // /challenge, sign the returned nonce, POST /attest without echoing nonce.
 func attestationFlow(t *testing.T, socketPath, serviceKey, shareName, proto, host string, port uint16, sign func(string) string) (protocol.AgentAttestation, int, error) {

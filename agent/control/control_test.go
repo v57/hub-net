@@ -7,10 +7,10 @@ import (
 	"testing"
 
 	"github.com/v57/channel-go/channelgo"
+	"github.com/v57/hub-net-node/identity"
+	"github.com/v57/hub-net/hubconn"
 	"github.com/v57/hub-net/profile"
 	"github.com/v57/hub-net/wireguard"
-	hubservice "github.com/v57/hub-service-go"
-	"github.com/v57/hub-service-go/identity"
 )
 
 func testController(t *testing.T) (*Controller, *profile.Profile, *wireguard.FakeAdapter) {
@@ -88,7 +88,7 @@ func TestRegisterAllControlPaths(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	svc, err := hubservice.New(hubservice.Options{Identity: id})
+	svc, err := hubconn.New(hubconn.Options{Identity: id})
 	if err != nil {
 		t.Fatal(err)
 	}

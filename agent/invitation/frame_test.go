@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/v57/hub-service-go/protocol"
+	protocol "github.com/v57/hub-net-node/models"
 )
 
 func TestFrameRoundTrip(t *testing.T) {

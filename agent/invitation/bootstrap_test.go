@@ -13,9 +13,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/v57/hub-net-node/identity"
+	protocol "github.com/v57/hub-net-node/models"
 	"github.com/v57/hub-net/wireguard"
-	"github.com/v57/hub-service-go/identity"
-	"github.com/v57/hub-service-go/protocol"
 )
 
 func wgKeyPair(t *testing.T) (private, public []byte) {

@@ -31,9 +31,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/v57/hub-net-node/identity"
+	hubprotocol "github.com/v57/hub-net-node/models"
 	"github.com/v57/hub-net-node/protocol"
-	"github.com/v57/hub-service-go/identity"
-	hubprotocol "github.com/v57/hub-service-go/protocol"
 )
 
 const (

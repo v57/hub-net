@@ -10,7 +10,7 @@ import (
 )
 
 func TestWireFixtures(t *testing.T) {
-	fixturesDir := filepath.Join("..", "..", "..", "openspec", "fixtures", "native-join")
+	fixturesDir := filepath.Join("testdata", "native-join")
 
 	t.Run("header.json", func(t *testing.T) {
 		data, err := os.ReadFile(filepath.Join(fixturesDir, "header.json"))

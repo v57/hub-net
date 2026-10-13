@@ -1,15 +1,15 @@
-# go.mod replaces channel-go with ~/Developer/Hub/Channel/channel-go and the
-# other modules with workspace siblings, so build from ~/Developer/Hub:
-#   docker build -f Workspaces/vpn/hub-net/agent/Dockerfile -t hub-net .
+# go.mod replaces channel-go, hub-service-go and hub-net-node with their
+# ~/Developer/Hub clones, so build from ~/Developer/Hub:
+#   docker build -f Network/hub-net/agent/Dockerfile -t hub-net .
 FROM golang:1.26-bookworm AS build
 
 WORKDIR /src
 COPY Channel/channel-go /src/Channel/channel-go
-COPY Workspaces/vpn/hub-service-go /src/Workspaces/vpn/hub-service-go
-COPY Workspaces/vpn/hub-net-node /src/Workspaces/vpn/hub-net-node
-COPY Workspaces/vpn/hub-net/agent /src/Workspaces/vpn/hub-net/agent
+COPY HubService/hub-service-go /src/HubService/hub-service-go
+COPY Network/hub-net-node /src/Network/hub-net-node
+COPY Network/hub-net/agent /src/Network/hub-net/agent
 
-WORKDIR /src/Workspaces/vpn/hub-net/agent
+WORKDIR /src/Network/hub-net/agent
 ARG VERSION=dev
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath \
     -ldflags="-s -w -X main.buildVersion=${VERSION}" \

@@ -16,12 +16,12 @@ import (
 	"time"
 
 	"github.com/v57/hub-net-node/config"
+	"github.com/v57/hub-net-node/identity"
+	hubprotocol "github.com/v57/hub-net-node/models"
 	nodeprotocol "github.com/v57/hub-net-node/protocol"
 	"github.com/v57/hub-net-node/server"
 	"github.com/v57/hub-net/nodeclient"
 	"github.com/v57/hub-net/wireguard"
-	"github.com/v57/hub-service-go/identity"
-	hubprotocol "github.com/v57/hub-service-go/protocol"
 )
 
 // hubProHostFixed is the inviter's overlay IPv4 inside the frozen overlay

@@ -19,7 +19,7 @@ import (
 	"errors"
 	"time"
 
-	"github.com/v57/hub-service-go/protocol"
+	protocol "github.com/v57/hub-net-node/models"
 )
 
 // MessageType labels a local IPC request.

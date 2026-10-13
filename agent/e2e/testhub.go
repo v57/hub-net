@@ -41,7 +41,7 @@ import (
 
 	"github.com/v57/channel-go/channelgo"
 	"github.com/v57/channel-go/server"
-	"github.com/v57/hub-service-go/protocol"
+	protocol "github.com/v57/hub-net-node/models"
 )
 
 // HubNetworkIDAgent is the overlay network identifier the agent-level test Hub

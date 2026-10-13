@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/v57/hub-service-go/identity"
-	"github.com/v57/hub-service-go/protocol"
+	"github.com/v57/hub-net-node/identity"
+	protocol "github.com/v57/hub-net-node/models"
 )
 
 func mustRegistrar(t *testing.T) (*Profile, *Registrar) {

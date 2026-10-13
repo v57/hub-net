@@ -8,7 +8,7 @@ package version
 import (
 	"fmt"
 
-	"github.com/v57/hub-service-go/protocol"
+	protocol "github.com/v57/hub-net-node/models"
 )
 
 // Major is the Hub Network protocol major version implemented by this agent.

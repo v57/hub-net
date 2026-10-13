@@ -10,10 +10,9 @@ import (
 
 	"github.com/v57/channel-go/channelgo"
 	"github.com/v57/hub-net/connection"
+	"github.com/v57/hub-net/hubconn"
 	"github.com/v57/hub-net/profile"
 	"github.com/v57/hub-net/wireguard"
-	hubservice "github.com/v57/hub-service-go"
-	"github.com/v57/hub-service-go/service"
 )
 
 const (
@@ -94,14 +93,14 @@ func New(options Options) (*Controller, error) {
 	}, nil
 }
 
-func (c *Controller) Register(svc *hubservice.Service) error {
+func (c *Controller) Register(svc *hubconn.Service) error {
 	if svc == nil {
 		return errors.New("control: service required")
 	}
-	view := service.Settings{Permissions: &service.Permissions{
+	view := hubconn.Settings{Permissions: &hubconn.Permissions{
 		Group: "hub-net", Name: "view-status",
 	}}
-	manage := service.Settings{Permissions: &service.Permissions{
+	manage := hubconn.Settings{Permissions: &hubconn.Permissions{
 		Group: "hub-net", Name: "manage-node-config",
 	}}
 	svc.Stream(ProfilePath, c.stream(func() any { return c.Profile() }), view)

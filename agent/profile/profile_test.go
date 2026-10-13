@@ -3,7 +3,7 @@ package profile
 import (
 	"testing"
 
-	"github.com/v57/hub-service-go/identity"
+	"github.com/v57/hub-net-node/identity"
 )
 
 func mustIdentity(t *testing.T) *identity.Identity {

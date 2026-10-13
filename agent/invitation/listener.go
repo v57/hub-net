@@ -28,8 +28,8 @@ import (
 	"sync"
 	"time"
 
+	protocol "github.com/v57/hub-net-node/models"
 	nodeprotocol "github.com/v57/hub-net-node/protocol"
-	"github.com/v57/hub-service-go/protocol"
 )
 
 const (

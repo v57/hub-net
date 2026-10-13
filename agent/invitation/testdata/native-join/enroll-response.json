@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "membershipId": "mem_123",
+  "hubNetworkId": "hn_456",
+  "overlayAddresses": [
+    "10.0.0.2",
+    "fd00::2"
+  ]
+}

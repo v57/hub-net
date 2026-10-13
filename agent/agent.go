@@ -31,6 +31,8 @@ import (
 	"time"
 
 	"github.com/v57/channel-go/channelgo"
+	"github.com/v57/hub-net-node/identity"
+	protocol "github.com/v57/hub-net-node/models"
 	nodeprotocol "github.com/v57/hub-net-node/protocol"
 	"github.com/v57/hub-net/config"
 	"github.com/v57/hub-net/connection"
@@ -39,6 +41,8 @@ import (
 	"github.com/v57/hub-net/enforcement"
 	"github.com/v57/hub-net/gateway"
 	"github.com/v57/hub-net/grant"
+	"github.com/v57/hub-net/hubconn"
+	"github.com/v57/hub-net/hubconn/network"
 	"github.com/v57/hub-net/invitation"
 	"github.com/v57/hub-net/ipc"
 	"github.com/v57/hub-net/keychain"
@@ -50,10 +54,6 @@ import (
 	"github.com/v57/hub-net/publications"
 	"github.com/v57/hub-net/version"
 	"github.com/v57/hub-net/wireguard"
-	hubservice "github.com/v57/hub-service-go"
-	"github.com/v57/hub-service-go/identity"
-	"github.com/v57/hub-service-go/network"
-	"github.com/v57/hub-service-go/protocol"
 )
 
 // Agent is the hub-net process. Construct with New and run with Run.
@@ -70,7 +70,7 @@ type Agent struct {
 	ipcCancel  context.CancelFunc
 	resolver   *dnsresolver.Resolver
 	dnsServer  *dnsresolver.Server
-	hubService *hubservice.Service
+	hubService *hubconn.Service
 	control    *control.Controller
 	profileID  *identity.Identity
 	wgPrivate  []byte
@@ -414,7 +414,7 @@ func (a *Agent) Run(ctx context.Context) (err error) {
 	a.profile.BeginRegistration()
 	defer a.profile.SetState(profile.StateUnregistered)
 
-	svc, err := hubservice.New(hubservice.Options{
+	svc, err := hubconn.New(hubconn.Options{
 		Identity: a.profileID,
 		Address:  a.config.HubAddress,
 		Name:     "hub-net",
@@ -1286,7 +1286,7 @@ func (a *Agent) Connections() *connection.Manager { return a.connections }
 func (a *Agent) Profile() *profile.Profile { return a.profile }
 
 // HubService returns the connected Hub service, or nil before Run.
-func (a *Agent) HubService() *hubservice.Service { return a.hubService }
+func (a *Agent) HubService() *hubconn.Service { return a.hubService }
 
 // SetResourceGeneration records the trusted authorization generation for a
 // resource. The production agent consumes generations from the

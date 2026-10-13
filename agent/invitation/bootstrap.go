@@ -10,7 +10,7 @@
 // the joiner needs to reach hub-pro through the inviter before its ordinary
 // hub/net/bind assigns permanent overlay addresses.
 //
-// The wire structs are shared cross-language in hub-service-go/protocol (and
+// The wire structs are shared cross-language in hub-net-node/models (and
 // the Swift mirror in HubService) and sign as canonical envelopes under the
 // hub-network/direct-bootstrap-request|response/v1 domains. This package owns
 // the inviter side: request verification, temporary peer installation, and
@@ -31,9 +31,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/v57/hub-net-node/identity"
+	protocol "github.com/v57/hub-net-node/models"
 	"github.com/v57/hub-net/wireguard"
-	"github.com/v57/hub-service-go/identity"
-	"github.com/v57/hub-service-go/protocol"
 )
 
 // Bootstrap address pools. The old Apple flow used addresses inside the
@@ -307,7 +307,7 @@ type Inviter struct {
 	now         func() time.Time
 	memberPeer  func(wireGuardKey []byte) []netip.Prefix
 
-	mu        sync.Mutex
+	mu sync.Mutex
 	// expected holds the joins the node signalled, by replay id. A request
 	// for anything else is rejected: the inviter's UDP listener is reachable
 	// by anyone, and only the node enforces that an invitation is genuine

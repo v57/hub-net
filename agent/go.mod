@@ -9,11 +9,11 @@ require (
 	golang.org/x/sys v0.31.0
 )
 
-replace github.com/v57/channel-go => ../../../../Channel/channel-go
+replace github.com/v57/channel-go => ../../../Channel/channel-go
 
 replace github.com/v57/hub-net-node => ../../hub-net-node
 
-replace github.com/v57/hub-service-go => ../../hub-service-go
+replace github.com/v57/hub-service-go => ../../../HubService/hub-service-go
 
 require (
 	github.com/bytedance/gopkg v0.1.3 // indirect

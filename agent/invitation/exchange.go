@@ -14,7 +14,7 @@ import (
 	"net"
 	"time"
 
-	"github.com/v57/hub-service-go/protocol"
+	protocol "github.com/v57/hub-net-node/models"
 )
 
 const (

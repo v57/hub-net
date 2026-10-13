@@ -14,7 +14,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/v57/hub-service-go/identity"
+	"github.com/v57/hub-net-node/identity"
 )
 
 // State describes where the profile sits in its lifecycle.

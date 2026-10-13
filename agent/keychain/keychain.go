@@ -20,7 +20,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/v57/hub-service-go/identity"
+	"github.com/v57/hub-net-node/identity"
 )
 
 // fileMode is the restrictive file mode for all persisted secrets.
