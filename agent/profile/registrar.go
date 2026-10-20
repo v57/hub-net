@@ -15,6 +15,7 @@ import (
 	"errors"
 	"fmt"
 	"runtime"
+	"strings"
 	"time"
 
 	"github.com/v57/channel-go/channelgo"
@@ -26,10 +27,15 @@ import (
 // operation.
 const DefaultRegistrationTimeout = 10 * time.Second
 
+// ErrDeviceEndpointExists is the Hub's refusal of a second agent (another
+// service key) on a device that already has a network endpoint.
+var ErrDeviceEndpointExists = errors.New("device_endpoint_exists")
+
 // Registrar sends hub/net/bind and updates the Profile lifecycle.
 type Registrar struct {
 	profile     *Profile
 	key         string
+	memberKey   string
 	timeout     time.Duration
 	platform    string
 	name        string
@@ -38,11 +44,15 @@ type Registrar struct {
 
 // RegistrarOptions configures the Registrar.
 type RegistrarOptions struct {
-	Profile  *Profile
-	Key      string
-	Timeout  time.Duration
-	Name     string
-	Platform string
+	Profile *Profile
+	Key     string
+	// MemberKey is the device member key (`device:<id>`) the Hub returns
+	// instead of Key when the connection is device-attached. Empty for
+	// agents without a device.
+	MemberKey string
+	Timeout   time.Duration
+	Name      string
+	Platform  string
 	// BindingKind defaults to machine (the hub-pro host's own agent).
 	BindingKind protocol.LocalAgentBindingKind
 }
@@ -73,6 +83,7 @@ func NewRegistrar(options RegistrarOptions) (*Registrar, error) {
 		bindingKind: bindingKind,
 		profile:     options.Profile,
 		key:         options.Key,
+		memberKey:   options.MemberKey,
 		timeout:     timeout,
 		platform:    platform,
 		name:        options.Name,
@@ -119,6 +130,9 @@ func (r *Registrar) Register(ctx context.Context, sender *channelgo.Sender) erro
 	raw, err := sender.Send("hub/net/bind", body)
 	if err != nil {
 		r.profile.SetState(StateRegistering)
+		if strings.Contains(err.Error(), ErrDeviceEndpointExists.Error()) {
+			return fmt.Errorf("profile: hub/net/bind: %w: this device already has a network endpoint on this hub", ErrDeviceEndpointExists)
+		}
 		return fmt.Errorf("profile: hub/net/bind: %w", err)
 	}
 	response, err := decodeRegisterResponse(raw)
@@ -127,7 +141,7 @@ func (r *Registrar) Register(ctx context.Context, sender *channelgo.Sender) erro
 		return fmt.Errorf("profile: hub/net/bind: %w", err)
 	}
 	registered := response.extract()
-	if registered.Key != r.key {
+	if registered.Key != r.key && (r.memberKey == "" || registered.Key != r.memberKey) {
 		r.profile.SetState(StateUnregistered)
 		return fmt.Errorf("profile: hub returned mismatched profile registration")
 	}

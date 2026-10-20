@@ -30,8 +30,10 @@ package e2e
 import (
 	"crypto/ed25519"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/x509"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/netip"
@@ -42,6 +44,7 @@ import (
 	"github.com/v57/channel-go/channelgo"
 	"github.com/v57/channel-go/server"
 	protocol "github.com/v57/hub-net-node/models"
+	hubservice "github.com/v57/hub-service-go"
 )
 
 // HubNetworkIDAgent is the overlay network identifier the agent-level test Hub
@@ -66,6 +69,20 @@ type TestHub struct {
 	netAccess map[string]bool         // keyed by caller key
 	registers map[string]int          // successful registrations by key
 	replaces  map[string]int          // successful share replacements by service key
+
+	// Device mode (NewDeviceTestHub) mirrors a device-aware hub-pro: it
+	// answers hub/info, checks v1 tokens and device certificates, and keys
+	// members by device:<id>. members maps service keys to member keys.
+	devices  bool
+	members  map[string]string
+	connects []Connect
+}
+
+// Connect records one connection's auth version and device attachment.
+type Connect struct {
+	Key     string
+	Version string
+	Device  string
 }
 
 type hubProfile struct {
@@ -89,6 +106,17 @@ type hubProvider struct {
 
 // NewTestHub starts an in-process Hub on an ephemeral port. Stop with Close.
 func NewTestHub() (*TestHub, error) {
+	return newTestHub(false)
+}
+
+// NewDeviceTestHub starts a TestHub in device mode: hub/info, v1 tokens,
+// device-attached connections, members keyed by device:<id>, and one network
+// endpoint per device (Docs/Devices/protocol.md sections 2, 3 and 10).
+func NewDeviceTestHub() (*TestHub, error) {
+	return newTestHub(true)
+}
+
+func newTestHub(devices bool) (*TestHub, error) {
 	hubPublic, hubPrivate, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
 		return nil, fmt.Errorf("testhub: generate hub key: %w", err)
@@ -109,6 +137,8 @@ func NewTestHub() (*TestHub, error) {
 		netAccess:  make(map[string]bool),
 		registers:  make(map[string]int),
 		replaces:   make(map[string]int),
+		devices:    devices,
+		members:    make(map[string]string),
 		nextV4:     100<<24 | 96<<16 | 0<<8 | 2, // 100.96.0.2, first allocatable
 	}
 	h.registerHandlers()
@@ -132,9 +162,96 @@ func (h *TestHub) serverOptions() server.Options {
 			if !ok {
 				return map[string]any{}
 			}
-			return map[string]any{"key": pub}
+			if !h.devices {
+				return map[string]any{"key": pub}
+			}
+			state := map[string]any{}
+			version := headers["v"]
+			if version == "1" && !verifyHubToken(token, h.hubKey) {
+				h.recordConnect(Connect{Version: version})
+				return state // a refused token: anonymous
+			}
+			state["key"] = pub
+			connect := Connect{Key: pub, Version: version}
+			// Certificates attach only hub-bound (v1) connections.
+			if version == "1" {
+				if device, ok := certifiedDevice(headers["device"], pub); ok {
+					state["device"] = device
+					connect.Device = device
+				}
+			}
+			h.recordConnect(connect)
+			return state
 		},
 	}
+}
+
+func (h *TestHub) recordConnect(connect Connect) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.connects = append(h.connects, connect)
+}
+
+// Connects lists every connection's auth version and device (device mode).
+func (h *TestHub) Connects() []Connect {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return append([]Connect(nil), h.connects...)
+}
+
+// MemberKey is the member key a service key is bound under ("" if unbound).
+func (h *TestHub) MemberKey(serviceKey string) string {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.members[serviceKey]
+}
+
+// verifyHubToken checks a v1 token's signature over hub1:<hubKey>:<expiry>.
+func verifyHubToken(token, hubKey string) bool {
+	parts := strings.Split(token, ".")
+	if len(parts) != 4 {
+		return false
+	}
+	public, err := parseSPKI(parts[1])
+	if err != nil {
+		return false
+	}
+	signature, err := base64.StdEncoding.DecodeString(parts[2])
+	return err == nil && ed25519.Verify(public, []byte("hub1:"+hubKey+":"+parts[3]), signature)
+}
+
+// certifiedDevice returns the device id of a valid certificate for service.
+func certifiedDevice(header, service string) (string, bool) {
+	if header == "" {
+		return "", false
+	}
+	certificate, err := hubservice.VerifyCertificate(header)
+	now := time.Now().Unix()
+	if err != nil || certificate.Service != service || certificate.Exp <= now-30 || certificate.Iat > now+30 {
+		return "", false
+	}
+	der, err := base64.StdEncoding.DecodeString(certificate.Device)
+	if err != nil {
+		return "", false
+	}
+	sum := sha256.Sum256(der)
+	return hex.EncodeToString(sum[:])[:32], true
+}
+
+func parseSPKI(encoded string) (ed25519.PublicKey, error) {
+	der, err := base64.StdEncoding.DecodeString(encoded)
+	if err != nil {
+		return nil, err
+	}
+	parsed, err := x509.ParsePKIXPublicKey(der)
+	if err != nil {
+		return nil, err
+	}
+	public, ok := parsed.(ed25519.PublicKey)
+	if !ok {
+		return nil, fmt.Errorf("not an ed25519 key")
+	}
+	return public, nil
 }
 
 // Port returns the ephemeral TCP port the Hub listens on.
@@ -223,6 +340,12 @@ func (h *TestHub) registerHandlers() {
 	h.ch.Post("hub/service/update", func(body channelgo.Body) (any, error) {
 		return "ok", nil
 	})
+	h.ch.Post("hub/info", func(body channelgo.Body) (any, error) {
+		if !h.devices {
+			return nil, fmt.Errorf("api not found")
+		}
+		return map[string]any{"key": h.hubKey, "protocol": 1, "pro": true, "mode": "default-allow"}, nil
+	})
 	h.ch.Post("hub/profile/update", func(body channelgo.Body) (any, error) {
 		return "ok", nil
 	})
@@ -259,32 +382,39 @@ func (h *TestHub) handleAgentRegister(body channelgo.Body) (any, error) {
 	if key == "" || wireGuardKey == "" {
 		return nil, fmt.Errorf("testhub: register requires authenticated key and wireGuardKey")
 	}
+	member := key
+	if device, _ := stateMap["device"].(string); device != "" {
+		member = "device:" + device
+	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	prof := h.profiles[key]
+	prof := h.profiles[member]
+	if prof != nil && prof.ownerServiceKey != key {
+		return nil, fmt.Errorf("device_endpoint_exists")
+	}
+	h.members[key] = member
 	if prof == nil {
 		v4, v6 := h.allocateOverlayLocked()
 		prof = &hubProfile{
-			key:             key,
+			key:             member,
 			wireGuardKey:    wireGuardKey,
 			overlayV4:       v4,
 			overlayV6:       v6,
 			ownerServiceKey: key,
 		}
-		h.profiles[key] = prof
+		h.profiles[member] = prof
 	} else {
 		// Reconnect: keep the stable overlay, refresh mutable fields.
-		prof.key = key
 		prof.wireGuardKey = wireGuardKey
 	}
-	h.registers[key]++
+	h.registers[member]++
 	// The attestation signer is the agent's SPKI-decoded Ed25519 key, decoded
 	// lazily at share-replace time. Stored as base64 here.
 	return map[string]any{
 		"success": true,
 		"profile": map[string]any{
 			"version":          protocol.WireVersion,
-			"key":              key,
+			"key":              member,
 			"wireGuardKey":     wireGuardKey,
 			"overlayAddresses": []string{prof.overlayV4, prof.overlayV6},
 			"connectedAt":      time.Now().UTC().Format(time.RFC3339Nano),
@@ -384,7 +514,7 @@ func (h *TestHub) handleConnectionGrant(body channelgo.Body) (any, error) {
 		return nil, fmt.Errorf("testhub: network permission denied")
 	}
 	caller := h.profileLocked(callerKey)
-	if caller == nil || caller.key != callerKey || caller.wireGuardKey != callerWireGuardKey {
+	if caller == nil || caller.ownerServiceKey != callerKey || caller.wireGuardKey != callerWireGuardKey {
 		return nil, fmt.Errorf("testhub: caller profile not registered or mismatched")
 	}
 	provider := h.providers[resourceID]
@@ -406,7 +536,7 @@ func (h *TestHub) handleConnectionGrant(body channelgo.Body) (any, error) {
 		GrantID:            "grant-" + resourceID + "-" + callerKey,
 		HubKey:             h.hubKey,
 		HubNetworkID:       HubNetworkIDAgent,
-		CallerKey:          callerKey,
+		CallerKey:          caller.key,
 		CallerWireGuardKey: callerWireGuardKey,
 		CallerAddress:      callerAddress,
 		TargetKey:          target.key,
@@ -446,8 +576,12 @@ func (h *TestHub) allocateOverlayLocked() (string, string) {
 	return v4, v6
 }
 
+// profileLocked finds a member by member key or by its service key.
 func (h *TestHub) profileLocked(key string) *hubProfile {
-	return h.profiles[key]
+	if prof := h.profiles[key]; prof != nil {
+		return prof
+	}
+	return h.profiles[h.members[key]]
 }
 
 func (h *TestHub) clearOwnerProvidersLocked(ownerKey string) {

@@ -54,6 +54,7 @@ import (
 	"github.com/v57/hub-net/publications"
 	"github.com/v57/hub-net/version"
 	"github.com/v57/hub-net/wireguard"
+	hubservice "github.com/v57/hub-service-go"
 )
 
 // Agent is the hub-net process. Construct with New and run with Run.
@@ -73,11 +74,14 @@ type Agent struct {
 	hubService *hubconn.Service
 	control    *control.Controller
 	profileID  *identity.Identity
-	wgPrivate  []byte
-	started    bool
-	prepared   bool
-	cancelRun  context.CancelFunc
-	networkUp  bool
+	// deviceKey certifies profileID on every Hub connect, so hubs key this
+	// agent's membership as device:<deviceID>. Nil connects as a plain key.
+	deviceKey *hubservice.DeviceKey
+	wgPrivate []byte
+	started   bool
+	prepared  bool
+	cancelRun context.CancelFunc
+	networkUp bool
 
 	// Grant/connection/enforcement wiring (HN-308/310). The verifier is built
 	// lazily from the first signature-verified grant, since hub-pro does not
@@ -316,6 +320,9 @@ func (a *Agent) Prepare(ctx context.Context) error {
 	}
 	a.profileID = profileID
 	a.wgPrivate = wgPrivate
+	if err := a.loadDeviceKey(); err != nil {
+		a.logger.Warn("device key unavailable; connecting as a plain key", slog.String("err", err.Error()))
+	}
 
 	prof, err := profile.New(profileID)
 	if err != nil {
@@ -349,6 +356,7 @@ func (a *Agent) Prepare(ctx context.Context) error {
 	registrar, err := profile.NewRegistrar(profile.RegistrarOptions{
 		Profile:     prof,
 		Key:         key,
+		MemberKey:   a.deviceMemberKey(),
 		Name:        "hub-net",
 		BindingKind: a.bindingKind,
 	})
@@ -415,9 +423,11 @@ func (a *Agent) Run(ctx context.Context) (err error) {
 	defer a.profile.SetState(profile.StateUnregistered)
 
 	svc, err := hubconn.New(hubconn.Options{
-		Identity: a.profileID,
-		Address:  a.config.HubAddress,
-		Name:     "hub-net",
+		Identity:    a.profileID,
+		Address:     a.config.HubAddress,
+		Name:        "hub-net",
+		HubKeysPath: hubservice.HubKeysPathFor(a.config.IdentityPath),
+		Device:      a.deviceKey,
 		NetworkOptions: network.Options{
 			AgentSocket: a.config.AgentSocketPath,
 		},
@@ -581,8 +591,7 @@ func (a *Agent) Run(ctx context.Context) (err error) {
 			if a.netUsers == nil {
 				return ""
 			}
-			key, _ := a.profileID.PublicKeyBase64()
-			for _, value := range a.netUsers.Addresses(key) {
+			for _, value := range a.ownAddresses() {
 				if parsed, err := netip.ParseAddr(value); err == nil && parsed.Is4() {
 					return parsed.String()
 				}
@@ -613,9 +622,9 @@ func (a *Agent) Run(ctx context.Context) (err error) {
 	if err := netapi.Register(svc, netapi.Options{
 		Store: a.netPorts, Registry: a.netUsers,
 		AgentID: func() string { key, _ := a.profileID.PublicKeyBase64(); return key },
+		Self:    a.isSelf,
 		AgentAddresses: func() (string, string) {
-			key, _ := a.profileID.PublicKeyBase64()
-			addresses := a.netUsers.Addresses(key)
+			addresses := a.ownAddresses()
 			var v4, v6 string
 			for _, value := range addresses {
 				if parsed, err := netip.ParseAddr(value); err == nil {
@@ -654,8 +663,7 @@ func (a *Agent) Run(ctx context.Context) (err error) {
 			if !ok {
 				return errors.New("unknown user")
 			}
-			key, _ := a.profileID.PublicKeyBase64()
-			destinations := a.netUsers.Addresses(key)
+			destinations := a.ownAddresses()
 			return a.enforcementMgr.ReplaceManual(id, user.OverlayAddresses, destinations, enforcement.ManualPorts{TCP: ports.TCP, UDP: ports.UDP})
 		},
 		RevokePeer: func(user protocol.AgentProfile) error {
@@ -816,8 +824,7 @@ func (a *Agent) watchNetUsers(ctx context.Context, sender *channelgo.Sender) {
 		if len(added) == 0 {
 			continue
 		}
-		key, _ := a.profileID.PublicKeyBase64()
-		destinations := a.netUsers.Addresses(key)
+		destinations := a.ownAddresses()
 		for _, profile := range added {
 			effective := a.netPorts.Effective(profile.Key)
 			if err := a.enforcementMgr.ReplaceManual(
@@ -848,10 +855,9 @@ func (a *Agent) syncMemberPeers(ctx context.Context, profiles []protocol.AgentPr
 	if _, up := a.adapter.State(); !up {
 		return
 	}
-	self, _ := a.profileID.PublicKeyBase64()
 	desired := make(map[string][]netip.Prefix)
 	for _, profile := range profiles {
-		if profile.Key == "" || profile.Key == self || profile.WireGuardKey == "" {
+		if profile.Key == "" || a.isSelf(profile.Key) || profile.WireGuardKey == "" {
 			continue
 		}
 		if !a.netUsers.Exists(profile.Key) {
@@ -891,6 +897,69 @@ func (a *Agent) syncMemberPeers(ctx context.Context, profiles []protocol.AgentPr
 			_ = a.adapter.RemovePeer(key)
 		}
 	}
+}
+
+// loadDeviceKey loads the device key the agent's service key is certified
+// with: the configured file, else (production only) the hub-service lookup.
+func (a *Agent) loadDeviceKey() error {
+	var (
+		key *hubservice.DeviceKey
+		err error
+	)
+	switch {
+	case a.config.DeviceKeyPath != "":
+		key, err = hubservice.LoadDeviceKeyFile(a.config.DeviceKeyPath)
+	case a.production:
+		key, err = hubservice.LoadDeviceKey()
+	default:
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	a.deviceKey = key
+	return nil
+}
+
+// DeviceID is this agent's device id, "" when it connects as a plain key.
+func (a *Agent) DeviceID() string {
+	if a.deviceKey == nil {
+		return ""
+	}
+	return a.deviceKey.ID()
+}
+
+// deviceMemberKey is the key hubs list this agent's membership under when its
+// connection is device-attached (Docs/Devices/protocol.md section 10).
+func (a *Agent) deviceMemberKey() string {
+	if id := a.DeviceID(); id != "" {
+		return "device:" + id
+	}
+	return ""
+}
+
+// isSelf reports whether a member key is this agent's: its service key
+// (legacy hubs, or an unapproved device) or its device member key.
+func (a *Agent) isSelf(key string) bool {
+	if key == "" {
+		return false
+	}
+	if device := a.deviceMemberKey(); device != "" && key == device {
+		return true
+	}
+	self, _ := a.profileID.PublicKeyBase64()
+	return key == self
+}
+
+// ownAddresses are this agent's overlay addresses from the member list.
+func (a *Agent) ownAddresses() []string {
+	if device := a.deviceMemberKey(); device != "" {
+		if addresses := a.netUsers.Addresses(device); len(addresses) > 0 {
+			return addresses
+		}
+	}
+	self, _ := a.profileID.PublicKeyBase64()
+	return a.netUsers.Addresses(self)
 }
 
 // memberPeerAddresses returns a member's permanent overlay prefixes by
@@ -1333,6 +1402,7 @@ func (a *Agent) ensureVerifier(seedHubKey, seedHubNetworkID string) error {
 		HubNetworkID:       hubNetworkID,
 		CallerKey:          snap.Key,
 		CallerWireGuardKey: localWireGuardKey,
+		CallerMemberKey:    a.deviceMemberKey(),
 	}, a.lookupGeneration)
 	if err != nil {
 		return fmt.Errorf("hubnet: build grant verifier: %w", err)

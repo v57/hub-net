@@ -52,7 +52,7 @@ func startAgent(t *testing.T, hubPort int, name string) *agentSide {
 // startAgentWithState starts an agent using a caller-owned persistent state
 // directory. Tests can stop it and construct a replacement process over the
 // same identity and WireGuard key files.
-func startAgentWithState(t *testing.T, hubPort int, name, stateDir string) *agentSide {
+func startAgentWithState(t *testing.T, hubPort int, name, stateDir string, configure ...func(*config.Config)) *agentSide {
 	t.Helper()
 	cfg := config.Defaults()
 	cfg.StateDir = stateDir
@@ -62,6 +62,9 @@ func startAgentWithState(t *testing.T, hubPort int, name, stateDir string) *agen
 	cfg.HubAddress = hubPort
 	cfg.HandshakeTimeout = 2 * time.Second
 	cfg.PeerIdleTimeout = 5 * time.Minute
+	for _, change := range configure {
+		change(&cfg)
+	}
 
 	backend := &enforcement.MemoryBackend{}
 	agent, err := hubnet.New(hubnet.Options{

@@ -30,6 +30,9 @@ type LocalBinding struct {
 	HubNetworkID       string
 	CallerKey          string
 	CallerWireGuardKey string
+	// CallerMemberKey is the caller's device member key (`device:<id>`),
+	// which hubs that key members by device may name instead of CallerKey.
+	CallerMemberKey string
 }
 
 // GenerationLookup returns the current authorization generation for a
@@ -88,7 +91,7 @@ func (v *Verifier) Verify(grant protocol.ConnectionGrant) error {
 	}
 	if grant.HubKey != v.local.HubKey ||
 		grant.HubNetworkID != v.local.HubNetworkID ||
-		grant.CallerKey != v.local.CallerKey ||
+		(grant.CallerKey != v.local.CallerKey && (v.local.CallerMemberKey == "" || grant.CallerKey != v.local.CallerMemberKey)) ||
 		grant.CallerWireGuardKey != v.local.CallerWireGuardKey {
 		return ErrBindingMismatch
 	}

@@ -144,9 +144,12 @@ func (r *Registry) Addresses(id string) []string {
 }
 
 type Options struct {
-	Store          *Store
-	Registry       *Registry
-	AgentID        func() string
+	Store    *Store
+	Registry *Registry
+	AgentID  func() string
+	// Self reports whether a member key is this agent's own (its service key
+	// or device:<id>). Default: equal to AgentID.
+	Self           func(string) bool
 	AgentAddresses func() (string, string)
 	NodeOnline     func() bool
 	VPN            func() bool
@@ -248,8 +251,12 @@ func users(o Options) []NetUser {
 	o.Registry.mu.RLock()
 	defer o.Registry.mu.RUnlock()
 	out := make([]NetUser, 0, len(o.Registry.profiles))
+	self := o.Self
+	if self == nil {
+		self = func(id string) bool { return id == o.AgentID() }
+	}
 	for id, p := range o.Registry.profiles {
-		if id == o.AgentID() {
+		if self(id) {
 			continue
 		}
 		u := usage[p.WireGuardKey]

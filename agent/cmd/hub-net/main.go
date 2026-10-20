@@ -47,6 +47,7 @@ func run(args []string) error {
 	socketPath := flags.String("socket", "", "daemon command IPC socket")
 	dnsListen := flags.String("dns-listen", cfg.DNSListenAddress, "reserved-suffix DNS listen address")
 	bootstrapListen := flags.String("bootstrap-listen", cfg.BootstrapListenAddress, "UDP address of the inviter's bootstrap listener (local hub only)")
+	deviceKey := flags.String("device-key", "", "device key file (default $HUB_DEVICE_KEY, /var/lib/hub/device.key as root, else ~/.hub/device.key)")
 	advertise := flags.String("advertise-address", "", "address joiners use to reach this inviter, e.g. behind port forwarding")
 	logJSON := flags.Bool("log-json", true, "emit JSON structured logs")
 	showVersion := flags.Bool("version", false, "print build version and exit")
@@ -102,6 +103,7 @@ func run(args []string) error {
 		sessionConfig.DNSListenAddress = *dnsListen
 		sessionConfig.BootstrapListenAddress = *bootstrapListen
 		sessionConfig.AdvertiseAddress = *advertise
+		sessionConfig.DeviceKeyPath = *deviceKey
 		// A joined membership keeps the inviter peer of its temporary
 		// bootstrap link so the hub-pro control connection through the
 		// inviter survives the join-time interface reconfiguration.

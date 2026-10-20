@@ -21,8 +21,6 @@ import (
 )
 
 const (
-	// authTokenValidFor is how long each connect's auth token stays valid.
-	authTokenValidFor = 10 * time.Second
 	// republishTimeout bounds the share republish after a reconnect.
 	republishTimeout = 30 * time.Second
 )
@@ -43,6 +41,15 @@ type Options struct {
 	Icon any
 	// Identity signs the auth token and share publications. Required.
 	Identity *identity.Identity
+	// HubKeysPath pins the hub's key so auth tokens are bound to it (v1).
+	// Empty keeps the pin in memory for this process.
+	HubKeysPath string
+	// Device certifies Identity with this device's key on every connect, so
+	// the hub attaches the connection to the device. Nil connects as a plain
+	// key.
+	Device *hubservice.DeviceKey
+	// Instance names this service on its device. Defaults to Name.
+	Instance string
 	// NetworkOptions configures share publication (agent socket, timeouts).
 	NetworkOptions network.Options
 	// OnConnect runs after every (re)connect, once the service is registered
@@ -81,11 +88,21 @@ func New(options Options) (*Service, error) {
 	}
 	s := &Service{identity: id, network: network.New(options.NetworkOptions)}
 	onConnect := options.OnConnect
+	instance := options.Instance
+	if instance == "" {
+		instance = options.Name
+	}
 	s.svc = hubservice.New(hubservice.ServiceOptions{
 		Address: options.Address,
 		Name:    options.Name,
 		Icon:    options.Icon,
-		Sign:    func() (string, error) { return id.AuthToken(authTokenValidFor) },
+		Key:     id.PrivateKey(),
+		HubKeys: options.HubKeysPath,
+		Device: hubservice.DeviceOptions{
+			Disabled: options.Device == nil,
+			Key:      options.Device,
+			Instance: instance,
+		},
 		OnConnect: func(sender *channelgo.Sender) {
 			s.republish(sender)
 			if onConnect != nil {
@@ -98,6 +115,9 @@ func New(options Options) (*Service, error) {
 
 // Identity is the identity the service signs with.
 func (s *Service) Identity() *identity.Identity { return s.identity }
+
+// HubKey is the hub's pinned key, "" until the first connect learns it.
+func (s *Service) HubKey() string { return s.svc.HubKey() }
 
 // Sender is the Hub connection's sender, nil before Start and after Stop.
 func (s *Service) Sender() *channelgo.Sender { return s.svc.Sender() }

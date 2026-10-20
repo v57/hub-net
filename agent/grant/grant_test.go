@@ -142,3 +142,24 @@ func key(fill byte) string {
 	}
 	return base64.StdEncoding.EncodeToString(raw)
 }
+
+func TestVerifyAcceptsTheCallerDeviceMemberKey(t *testing.T) {
+	_, grant := fixture(t)
+	verifier, err := NewVerifier(LocalBinding{
+		HubKey: grant.HubKey, HubNetworkID: "network-1", CallerKey: "profile-1",
+		CallerWireGuardKey: key(1), CallerMemberKey: "device:abc",
+	}, func(string) (uint64, bool) { return 4, true })
+	if err != nil {
+		t.Fatal(err)
+	}
+	grant.CallerKey = "device:abc"
+	resign(t, &grant)
+	if err := verifier.Verify(grant); err != nil {
+		t.Fatalf("device member grant: %v", err)
+	}
+	grant.GrantID, grant.CallerKey = "grant-2", "device:other"
+	resign(t, &grant)
+	if err := verifier.Verify(grant); !errors.Is(err, ErrBindingMismatch) {
+		t.Fatalf("other device grant: %v", err)
+	}
+}

@@ -85,6 +85,19 @@ Package installs dedicated-user systemd service with only `CAP_NET_ADMIN` and
 `replace` directives to their `~/Developer/Hub` clones (`Channel/`,
 `HubService/`, `Network/`).
 
+## Devices
+
+The agent is its device's network endpoint (`Docs/Devices/protocol.md`
+section 10). Every membership's service key is certified by the device key
+(`-device-key` / `deviceKeyPath`, else `$HUB_DEVICE_KEY`,
+`/var/lib/hub/device.key` as root, `~/.hub/device.key` otherwise) under the
+instance `hub-net`, and each auth token is bound to the hub's key, pinned in
+`hubs.json` next to the membership identity. A device-aware hub then keys the
+member as `device:<id>`; a second agent on the same device is refused with
+`device_endpoint_exists`. Legacy hubs keep keying it by service key, and the
+agent accepts either key as its own. Embedders and tests that set no
+`deviceKeyPath` connect as a plain key.
+
 ## Key separation
 
 Per the network-agent spec "Keys are separated and protected":

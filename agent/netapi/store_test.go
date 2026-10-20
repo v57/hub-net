@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	protocol "github.com/v57/hub-net-node/models"
 )
 
 func boolp(value bool) *bool { return &value }
@@ -123,5 +125,24 @@ func TestRegistryPersistsRevocationAndDetectsNewKeys(t *testing.T) {
 	}
 	if blocked.Exists("user-b") {
 		t.Fatal("Remove mutated memory on persist failure")
+	}
+}
+
+func TestUsersListLeavesOutEitherSelfKey(t *testing.T) {
+	registry := NewRegistry()
+	registry.Replace([]protocol.AgentProfile{
+		{Key: "service-self", OverlayAddresses: []string{"100.96.0.2"}},
+		{Key: "device:self", OverlayAddresses: []string{"100.96.0.3"}},
+		{Key: "device:peer", OverlayAddresses: []string{"100.96.0.4"}},
+	})
+	options := Options{Store: NewStore(), Registry: registry, AgentID: func() string { return "service-self" },
+		Self: func(id string) bool { return id == "service-self" || id == "device:self" }}
+	list := users(options)
+	if len(list) != 1 || list[0].ID != "device:peer" || list[0].IP != "100.96.0.4" {
+		t.Fatalf("users = %+v", list)
+	}
+	options.Self = nil
+	if list := users(options); len(list) != 2 {
+		t.Fatalf("default self filter: %+v", list)
 	}
 }

@@ -74,6 +74,12 @@ type Config struct {
 	// IdentityPath overrides the profile identity file. Defaults to
 	// StateDir/DefaultIdentityFile.
 	IdentityPath string `json:"identityPath,omitempty"`
+	// DeviceKeyPath is this device's key file. The agent's service key is
+	// certified by it, so hubs key its membership by device. Empty in
+	// production uses the hub-service lookup ($HUB_DEVICE_KEY,
+	// /var/lib/hub/device.key as root, else ~/.hub/device.key); embedders
+	// and tests without it connect as a plain key.
+	DeviceKeyPath string `json:"deviceKeyPath,omitempty"`
 	// WireGuardKeyPath overrides the WireGuard private key file. Defaults to
 	// StateDir/DefaultWireGuardKeyFile.
 	WireGuardKeyPath string `json:"wireGuardKeyPath,omitempty"`
