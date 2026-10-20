@@ -509,6 +509,12 @@ func (h *TestHub) handleSharesReplace(body channelgo.Body) (any, error) {
 		if err := verifyAgentAttestation(att, prof); err != nil {
 			return nil, fmt.Errorf("testhub: verify attestation: %w", err)
 		}
+		// A share's address is its service's device: only that device's
+		// agent may front it.
+		if device, _ := stateMap["device"].(string); h.devices && device != "" &&
+			strings.HasPrefix(prof.key, "device:") && prof.key != "device:"+device {
+			return nil, fmt.Errorf("share_device_mismatch")
+		}
 		name, _ := shareMap["name"].(string)
 		proto, _ := shareMap["protocol"].(string)
 		target, _ := shareMap["target"].(map[string]any)

@@ -3,6 +3,7 @@ package e2e
 import (
 	"context"
 	"encoding/base64"
+	"errors"
 	"net/netip"
 	"path/filepath"
 	"testing"
@@ -11,7 +12,10 @@ import (
 	"github.com/v57/hub-net-node/identity"
 	protocol "github.com/v57/hub-net-node/models"
 	"github.com/v57/hub-net/config"
+	"github.com/v57/hub-net/hubconn"
+	servicenetwork "github.com/v57/hub-net/hubconn/network"
 	"github.com/v57/hub-net/profile"
+	hubservice "github.com/v57/hub-service-go"
 )
 
 // startDeviceAgent starts an agent whose service key is certified by the
@@ -236,4 +240,71 @@ func TestAgentE2ERevokedDeviceIsDropped(t *testing.T) {
 	hub.RevokeDevice(providerMember)
 	restart(t, hub)
 	waitFor(t, "caller drops the revoked provider", func() bool { return !hasPeer(caller, providerWireGuard) })
+}
+
+// startDeviceService connects a separate service certified by the device key
+// at deviceKeyPath; it publishes shares through agent's socket.
+func startDeviceService(t *testing.T, hub *TestHub, agent *agentSide, deviceKeyPath string) *hubconn.Service {
+	t.Helper()
+	id, err := identity.Generate()
+	if err != nil {
+		t.Fatal(err)
+	}
+	device, err := hubservice.LoadDeviceKeyFile(deviceKeyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	service, err := hubconn.New(hubconn.Options{
+		Identity: id, Address: hub.Port(), Name: "share-service", Device: device,
+		NetworkOptions: servicenetwork.Options{AgentSocket: agent.cfg.AgentSocketPath},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := service.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(service.Stop)
+	key, _ := id.PublicKeyBase64()
+	waitFor(t, "device-attached service connection", func() bool {
+		for _, connect := range hub.Connects() {
+			if connect.Key == key && connect.Device == device.ID() {
+				return service.Sender() != nil
+			}
+		}
+		return false
+	})
+	return service
+}
+
+// TestAgentE2ESharesFollowTheServiceDevice: a service's share is fronted by
+// the agent on the service's own device, and refused through an agent on
+// another device.
+func TestAgentE2ESharesFollowTheServiceDevice(t *testing.T) {
+	hub, err := NewDeviceTestHub()
+	if err != nil {
+		t.Fatalf("NewDeviceTestHub: %v", err)
+	}
+	defer hub.Close()
+	devices := t.TempDir()
+	hostKey := filepath.Join(devices, "host.key")
+	host := startDeviceAgent(t, hub.Port(), "host", hostKey)
+	member := "device:" + host.agent.DeviceID()
+	waitFor(t, "host agent", func() bool { return hub.RegistrationCount(member) > 0 })
+	host.waitRegistered(t, "host")
+
+	local := startDeviceService(t, hub, host, hostKey)
+	publications, err := local.PublishShare(context.Background(), "files", servicenetwork.ProtocolTCP, "127.0.0.1", 9100, nil)
+	if err != nil {
+		t.Fatalf("publish on the service's device: %v", err)
+	}
+	if len(publications) != 1 || publications[0].OverlayAddress != host.agent.Profile().Snapshot().OverlayAddress {
+		t.Fatalf("publications = %+v", publications)
+	}
+
+	elsewhere := startDeviceService(t, hub, host, filepath.Join(devices, "other.key"))
+	_, err = elsewhere.PublishShare(context.Background(), "files", servicenetwork.ProtocolTCP, "127.0.0.1", 9101, nil)
+	if !errors.Is(err, servicenetwork.ErrShareDeviceMismatch) {
+		t.Fatalf("publish through another device's agent: %v", err)
+	}
 }

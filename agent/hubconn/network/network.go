@@ -16,6 +16,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -73,6 +74,12 @@ type Publication = protocol.NetworkSharePublication
 // Attestation is the local-agent signed proof that the service owns the share
 // target.
 type Attestation = protocol.AgentAttestation
+
+// ErrShareDeviceMismatch is the Hub's refusal of a share fronted by an agent
+// on another device than the service's certificate names: a share's address
+// is its service's device, so only that device's agent may front it
+// (Docs/Devices/protocol.md section 10).
+var ErrShareDeviceMismatch = errors.New("share_device_mismatch")
 
 // LocalAgentErrorCode classifies local-agent IPC failures.
 type LocalAgentErrorCode string
@@ -299,6 +306,9 @@ func (p *Publisher) synchronize(ctx context.Context, serviceKey string, signer S
 
 	response, err := sender.Send("network/shares/replace", protocol.SharesReplacePayload{Shares: wireShares})
 	if err != nil {
+		if strings.Contains(err.Error(), "share_device_mismatch") {
+			return nil, fmt.Errorf("network: shares/replace: %w: %v", ErrShareDeviceMismatch, err)
+		}
 		return nil, fmt.Errorf("network: shares/replace: %w", err)
 	}
 	publications, err := decodePublications(response)

@@ -105,6 +105,14 @@ only hub-signed connection grants; agent-local port grants are retired, so
 a leftover `ports.json` is ignored. `net/users`, `net/info` and `net/revoke`
 stay.
 
+Shares follow the service's device. A share's authority stays derived from
+the service key and share name, so it survives a move, and its address is
+the overlay address of the device the service's certificate names. Only
+that device's agent may front it: a publication attested by an agent on
+another device fails with `network.ErrShareDeviceMismatch`
+(`share_device_mismatch`). A moved service republishes on its next connect
+and the new device's agent fronts it.
+
 ## Key separation
 
 Per the network-agent spec "Keys are separated and protected":
