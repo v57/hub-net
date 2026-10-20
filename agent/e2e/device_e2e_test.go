@@ -55,8 +55,8 @@ func waitFor(t *testing.T, what string, done func() bool) {
 }
 
 // TestAgentE2EDeviceMembers proves the agent joins as a device: it learns the
-// hub key on a v0 connection that registers nothing, binds on the hub-bound
-// device-attached connection, is listed as device:<id>, and connection grants
+// hub key on an anonymous probe, binds on its one hub-bound device-attached
+// connection, is listed as device:<id>, and connection grants
 // naming device members verify on both sides.
 func TestAgentE2EDeviceMembers(t *testing.T) {
 	hub, err := NewDeviceTestHub()
@@ -89,8 +89,8 @@ func TestAgentE2EDeviceMembers(t *testing.T) {
 			versions = append(versions, connect.Version+":"+connect.Device)
 		}
 	}
-	if len(versions) != 2 || versions[0] != "0:" || versions[1] != "1:"+provider.agent.DeviceID() {
-		t.Fatalf("provider connects = %v, want a v0 key lookup then one v1 device connection", versions)
+	if len(versions) != 1 || versions[0] != "1:"+provider.agent.DeviceID() {
+		t.Fatalf("provider connects = %v, want one v1 device connection (hub/info goes on an anonymous probe)", versions)
 	}
 	if got := provider.agent.HubService().HubKey(); got != hub.HubKey() {
 		t.Fatalf("pinned hub key %q", got)
