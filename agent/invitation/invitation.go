@@ -13,7 +13,9 @@ import (
 )
 
 const URLPrefix = "hub://join/"
-const DefaultNode = "https://hub.v57.dev/node"
+
+// There is no built-in hub-net-node (Docs/Devices/protocol.md section 10):
+// every invitation names its node in `?e=`.
 const MaxLifetime = 8 * 24 * time.Hour
 const MaxCodeSize = 1024
 
@@ -86,18 +88,16 @@ func Decode(input string, now time.Time) (Decoded, error) {
 	if expiration.After(now.Add(MaxLifetime)) {
 		return Decoded{}, fail("invite_invalid_time", "invitation exceeds maximum lifetime")
 	}
-	node := DefaultNode
-	if rawQuery != "" {
-		query, err := url.ParseQuery(rawQuery)
-		if err != nil || len(query) != 1 || len(query["e"]) != 1 || query.Encode() != rawQuery || query.Get("e") == "" {
-			return Decoded{}, fail("invite_non_canonical", "invalid invitation query")
-		}
-		endpoint := query.Get("e")
-		if strings.Contains(endpoint, "://") {
-			node = endpoint
-		} else {
-			node = "https://" + endpoint
-		}
+	if rawQuery == "" {
+		return Decoded{}, fail("invite_missing_node", "invitation names no Hub Network node")
+	}
+	query, err := url.ParseQuery(rawQuery)
+	if err != nil || len(query) != 1 || len(query["e"]) != 1 || query.Encode() != rawQuery || query.Get("e") == "" {
+		return Decoded{}, fail("invite_non_canonical", "invalid invitation query")
+	}
+	node := query.Get("e")
+	if !strings.Contains(node, "://") {
+		node = "https://" + node
 	}
 	digest := sha256.Sum256([]byte(payload))
 	spki := append(append([]byte{}, spkiPrefix...), agent...)

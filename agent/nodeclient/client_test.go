@@ -602,7 +602,7 @@ func TestNormalizeEndpoint(t *testing.T) {
 		want string
 	}{
 		{"127.0.0.1:1964", "ws://127.0.0.1:1964/rendezvous"},
-		{"hub.v57.dev/node", "ws://hub.v57.dev/node"},
+		{"node.example.com/node", "ws://node.example.com/node"},
 		{"wss://node.example/rendezvous", "wss://node.example/rendezvous"},
 	}
 	for _, tc := range cases {

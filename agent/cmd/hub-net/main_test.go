@@ -101,7 +101,7 @@ func TestJoinRecordShape(t *testing.T) {
 		HubName:          "My Hub",
 		OverlayAddresses: []string{"100.96.0.2", "fd48:5542:4e45::2"},
 	}
-	record, err := joinRecord(store, "replay-id", result, "https://hub.v57.dev/node")
+	record, err := joinRecord(store, "replay-id", result, "https://node.example.com/node")
 	if err != nil {
 		t.Fatalf("joinRecord: %v", err)
 	}
@@ -120,7 +120,7 @@ func TestJoinRecordShape(t *testing.T) {
 	if string(record.HubAddress) != `"ws://100.96.0.1:1997"` {
 		t.Errorf("record.HubAddress = %s", record.HubAddress)
 	}
-	if record.NodeURL != "https://hub.v57.dev/node" {
+	if record.NodeURL != "https://node.example.com/node" {
 		t.Errorf("record.NodeURL = %q", record.NodeURL)
 	}
 }

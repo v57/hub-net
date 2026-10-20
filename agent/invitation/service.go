@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"net/url"
 	"time"
@@ -28,6 +29,9 @@ func RegisterInviteService(svc *hubconn.Service, id *identity.Identity, endpoint
 		return fmt.Errorf("invitation: service, identity and online state required")
 	}
 	svc.Post(InvitePath, func(channelgo.Body) (any, error) {
+		if endpoint() == "" {
+			return nil, errNoNode
+		}
 		for deadline := time.Now().Add(inviteOnlineWait); !online(); {
 			if time.Now().After(deadline) {
 				return nil, fmt.Errorf("invitation: not registered with hub-net-node %s", endpoint())
@@ -41,8 +45,15 @@ func RegisterInviteService(svc *hubconn.Service, id *identity.Identity, endpoint
 	return nil
 }
 
-// CreateCode returns publicKey.expires.nonce?query/signature.
+// errNoNode refuses invitations while no hub-net-node is set (hub/net/node).
+var errNoNode = errors.New("invitation: no Hub Network node is set; set one with hub/net/node/set")
+
+// CreateCode returns publicKey.expires.nonce?e=node/signature. endpoint (the
+// hub-net-node) is required: there is no built-in node.
 func CreateCode(id *identity.Identity, endpoint string) (string, error) {
+	if endpoint == "" {
+		return "", errNoNode
+	}
 	var nonce [4]byte
 	if _, err := rand.Read(nonce[:]); err != nil {
 		return "", fmt.Errorf("invitation: nonce: %w", err)
@@ -51,9 +62,7 @@ func CreateCode(id *identity.Identity, endpoint string) (string, error) {
 	binary.BigEndian.PutUint32(expires[:], uint32(time.Now().Add(7*24*time.Hour).Unix()))
 	publicKey := base64.RawURLEncoding.EncodeToString(id.PublicKey())
 	payload := publicKey + "." + base64.RawURLEncoding.EncodeToString(expires[:]) + "." + base64.RawURLEncoding.EncodeToString(nonce[:])
-	if endpoint != "" && endpoint != "hub.v57.dev/node" {
-		payload += "?e=" + url.QueryEscape(endpoint)
-	}
+	payload += "?e=" + url.QueryEscape(endpoint)
 	signed := ed25519.Sign(id.PrivateKey(), []byte(payload))
 	signature := base64.RawURLEncoding.EncodeToString(signed)
 	return payload + "/" + signature, nil

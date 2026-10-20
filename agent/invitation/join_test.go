@@ -445,11 +445,11 @@ func TestJoinRejectsInvalidInvitation(t *testing.T) {
 }
 
 func TestNodeEndpoints(t *testing.T) {
-	wsURL, udp, err := nodeEndpoints("https://hub.v57.dev/node")
+	wsURL, udp, err := nodeEndpoints("https://localhost/node")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if wsURL != "wss://hub.v57.dev/node/rendezvous" {
+	if wsURL != "wss://localhost/node/rendezvous" {
 		t.Errorf("wsURL = %q", wsURL)
 	}
 	if udp.Port != 443 || !strings.HasSuffix(udp.String(), ":443") {
