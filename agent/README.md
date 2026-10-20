@@ -30,9 +30,7 @@ APIs, and end-to-end tests.
 | HN-837 | Complete: guarded privileged Linux multi-Hub acceptance for overlapping IPv4/IPv6 translation, DNS/node isolation, restart recovery, scoped leave, interrupted cleanup, and removeAll |
 | HN-841 | Complete: disabled-by-default per-Hub gateway serving, persistent `vpn allow/remove`, Hub capability lifecycle, isolated Linux forwarding/NAT/firewall, flow termination, and restart restore |
 
-See `../PLATFORMS.md` for the platform matrix and
-`../../openspec/changes/hub-network/protocol-foundations.md` for frozen
-naming, identity, and overlay constants.
+See `../PLATFORMS.md` for the platform matrix.
 
 ## Layout
 
