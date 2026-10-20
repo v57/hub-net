@@ -102,7 +102,7 @@ The agent follows `network/devices/revoked`: a revoked device's WireGuard
 peers, firewall rules and flows are dropped and never come back. It enforces
 only hub-signed connection grants; agent-local port grants are retired, so
 `net/ports/update` is refused (`port grants are retired; publish a share`) and
-a leftover `ports.json` is ignored. `net/users`, `net/info` and `net/revoke`
+a leftover `ports.json` is deleted at startup. `net/users`, `net/info` and `net/revoke`
 stay.
 
 Shares follow the service's device. A share's authority stays derived from

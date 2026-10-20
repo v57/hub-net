@@ -245,3 +245,24 @@ func TestConfigureInterfaceUpFailureRollsBack(t *testing.T) {
 		t.Fatal("wireguard interface left up after setup failure")
 	}
 }
+
+func TestPrepareClearsRetiredPortGrants(t *testing.T) {
+	cfg := newConfig(t)
+	if err := os.MkdirAll(cfg.StateDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	ports := filepath.Join(cfg.StateDir, "ports.json")
+	if err := os.WriteFile(ports, []byte(`{"global":{"tcp":[22]}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	agent, err := New(Options{Config: cfg})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := agent.Prepare(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(ports); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("ports.json kept: %v", err)
+	}
+}

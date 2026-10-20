@@ -330,6 +330,12 @@ func (a *Agent) Prepare(ctx context.Context) error {
 	if err := a.loadDeviceKey(); err != nil {
 		a.logger.Warn("device key unavailable; connecting as a plain key", slog.String("err", err.Error()))
 	}
+	// Agent-local port grants are retired; clear the ones stored before.
+	if err := os.Remove(filepath.Join(a.config.StateDir, retiredPortsFile)); err == nil {
+		a.logger.Info("cleared retired port grants")
+	} else if !errors.Is(err, os.ErrNotExist) {
+		a.logger.Warn("clear retired port grants", slog.String("err", err.Error()))
+	}
 
 	prof, err := profile.New(profileID)
 	if err != nil {
@@ -1618,6 +1624,10 @@ func (a *Agent) AuthorizeFlow(grantValue protocol.ConnectionGrant) error {
 	}
 	return a.enforcementMgr.Authorize(grantValue)
 }
+
+// retiredPortsFile held agent-local port grants, retired in favour of
+// hub-signed connection grants.
+const retiredPortsFile = "ports.json"
 
 // errRevokedPeer refuses a grant whose other end is a revoked device.
 var errRevokedPeer = errors.New("hubnet: peer device is revoked")
