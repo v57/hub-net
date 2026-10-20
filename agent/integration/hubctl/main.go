@@ -7,7 +7,7 @@
 //	hubctl -hub ws://127.0.0.1:1997 -identity owner.identity invite
 //	hubctl -hub ws://127.0.0.1:1997 -identity owner.identity list
 //	hubctl -hub ws://127.0.0.1:1997 -identity owner.identity approve
-//	hubctl -identity owner.identity agent post net/ports/update '{"update":[{"port":8080}]}'
+//	hubctl -identity owner.identity agent post net/revoke '"<member key>"'
 //	hubctl -identity owner.identity agent stream net/users
 package main
 

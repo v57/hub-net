@@ -126,7 +126,6 @@ type Agent struct {
 	// test harness injects values directly.
 	genMu       sync.RWMutex
 	generations map[string]uint64
-	netPorts    *netapi.Store
 	netUsers    *netapi.Registry
 	// nodeClient keeps the online-inviter registration live against
 	// hub-net-node; NodeOnline reports its lease state.
@@ -275,7 +274,6 @@ func New(options Options) (*Agent, error) {
 		interfaceName:      interfaceName,
 		initialPeers:       append([]wireguard.PeerConfig(nil), options.InitialPeers...),
 		generations:        make(map[string]uint64),
-		netPorts:           netapi.NewStore(filepath.Join(cfg.StateDir, "ports.json")),
 		netUsers:           netapi.NewRegistry(filepath.Join(cfg.StateDir, "revoked-users.json")),
 		dnsServer: &dnsresolver.Server{
 			Resolver:  resolver,
@@ -630,9 +628,9 @@ func (a *Agent) Run(ctx context.Context) (err error) {
 		}
 	}
 	if err := netapi.Register(svc, netapi.Options{
-		Store: a.netPorts, Registry: a.netUsers,
-		AgentID: func() string { key, _ := a.profileID.PublicKeyBase64(); return key },
-		Self:    a.isSelf,
+		Registry: a.netUsers,
+		AgentID:  func() string { key, _ := a.profileID.PublicKeyBase64(); return key },
+		Self:     a.isSelf,
 		AgentAddresses: func() (string, string) {
 			addresses := a.ownAddresses()
 			var v4, v6 string
@@ -665,26 +663,27 @@ func (a *Agent) Run(ctx context.Context) (err error) {
 			}
 			return out
 		},
-		ApplyFirewall: func(id string, ports netapi.Ports) error {
-			if a.enforcementMgr == nil {
-				return errors.New("hubnet: firewall enforcement unavailable on this platform")
-			}
-			user, ok := a.netUsers.Profile(id)
-			if !ok {
-				return errors.New("unknown user")
-			}
-			destinations := a.ownAddresses()
-			return a.enforcementMgr.ReplaceManual(id, user.OverlayAddresses, destinations, enforcement.ManualPorts{TCP: ports.TCP, UDP: ports.UDP})
-		},
 		RevokePeer: func(user protocol.AgentProfile) error {
 			raw, err := base64.StdEncoding.DecodeString(user.WireGuardKey)
 			if err != nil {
 				return err
 			}
 			if a.connections != nil {
-				return a.connections.Remove(raw)
+				err = a.connections.Remove(raw)
+			} else {
+				err = a.adapter.RemovePeer(raw)
 			}
-			return a.adapter.RemovePeer(raw)
+			if err != nil || a.enforcementMgr == nil {
+				return err
+			}
+			var sources []netip.Addr
+			for _, prefix := range overlayPrefixes(user.OverlayAddresses) {
+				sources = append(sources, prefix.Addr())
+			}
+			a.mu.Lock()
+			sources = append(sources, a.peerSources[user.WireGuardKey]...)
+			a.mu.Unlock()
+			return a.enforcementMgr.RevokeSources(sources)
 		},
 	}); err != nil {
 		return fmt.Errorf("hubnet: register network API: %w", err)
@@ -794,10 +793,6 @@ func (a *Agent) Run(ctx context.Context) (err error) {
 func (a *Agent) watchNetUsers(ctx context.Context, sender *channelgo.Sender) {
 	values := sender.Values("network/agents/list", nil)
 	defer values.Return()
-	// known tracks the profile set of the previous snapshot so a newly
-	// learned user immediately receives its effective global + manual port
-	// grants instead of waiting for the next explicit update.
-	known := map[string]struct{}{}
 	for {
 		item, err := values.Next(ctx)
 		if err != nil || item.Done {
@@ -821,40 +816,6 @@ func (a *Agent) watchNetUsers(ctx context.Context, sender *channelgo.Sender) {
 		}
 		a.mu.Unlock()
 		a.syncMemberPeers(ctx, profiles)
-		if a.enforcementMgr == nil || a.netPorts == nil {
-			continue
-		}
-		current := map[string]struct{}{}
-		var added []protocol.AgentProfile
-		for _, profile := range profiles {
-			if profile.Key == "" || !a.netUsers.Exists(profile.Key) {
-				continue
-			}
-			current[profile.Key] = struct{}{}
-			if _, ok := known[profile.Key]; !ok {
-				added = append(added, profile)
-			}
-		}
-		known = current
-		if len(added) == 0 {
-			continue
-		}
-		destinations := a.ownAddresses()
-		for _, profile := range added {
-			effective := a.netPorts.Effective(profile.Key)
-			if err := a.enforcementMgr.ReplaceManual(
-				profile.Key,
-				profile.OverlayAddresses,
-				destinations,
-				enforcement.ManualPorts{TCP: effective.TCP, UDP: effective.UDP},
-			); err != nil {
-				a.logger.Error(
-					"hubnet: apply port grants to new user",
-					slog.String("user", profile.Key),
-					slog.String("err", err.Error()),
-				)
-			}
-		}
 	}
 }
 

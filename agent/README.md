@@ -98,6 +98,13 @@ member as `device:<id>`; a second agent on the same device is refused with
 agent accepts either key as its own. Embedders and tests that set no
 `deviceKeyPath` connect as a plain key.
 
+The agent follows `network/devices/revoked`: a revoked device's WireGuard
+peers, firewall rules and flows are dropped and never come back. It enforces
+only hub-signed connection grants; agent-local port grants are retired, so
+`net/ports/update` is refused (`port grants are retired; publish a share`) and
+a leftover `ports.json` is ignored. `net/users`, `net/info` and `net/revoke`
+stay.
+
 ## Key separation
 
 Per the network-agent spec "Keys are separated and protected":

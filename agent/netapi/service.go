@@ -1,3 +1,11 @@
+// Package netapi serves the agent's Hub Network APIs: the member and network
+// views (net/users, net/info) and member revocation (net/revoke).
+//
+// Agent-local port grants (net/ports/update) are retired
+// (Docs/Devices/device-layer.md section 12): the agent enforces only
+// hub-signed connection grants, so ports are reached through published
+// shares. The path stays registered and refuses with errPortGrantsRetired so
+// older apps get a clear answer.
 package netapi
 
 import (
@@ -6,6 +14,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"path/filepath"
 	"sort"
 	"sync"
 	"time"
@@ -14,6 +23,8 @@ import (
 	protocol "github.com/v57/hub-net-node/models"
 	"github.com/v57/hub-net/hubconn"
 )
+
+var errPortGrantsRetired = errors.New("port grants are retired; publish a share")
 
 const (
 	PortsUpdatePath = "net/ports/update"
@@ -27,8 +38,9 @@ type NetUser struct {
 	IP       string    `json:"ip"`
 	LastUsed time.Time `json:"lastUsed"`
 	Online   bool      `json:"online"`
-	TCP      []uint16  `json:"tcp"`
-	UDP      []uint16  `json:"udp"`
+	// TCP and UDP are always empty: port grants are retired.
+	TCP []uint16 `json:"tcp"`
+	UDP []uint16 `json:"udp"`
 }
 type NetInfo struct {
 	ID     string   `json:"id"`
@@ -144,7 +156,6 @@ func (r *Registry) Addresses(id string) []string {
 }
 
 type Options struct {
-	Store    *Store
 	Registry *Registry
 	AgentID  func() string
 	// Self reports whether a member key is this agent's own (its service key
@@ -154,84 +165,38 @@ type Options struct {
 	NodeOnline     func() bool
 	VPN            func() bool
 	PeerUsage      func() []PeerUsage
-	ApplyFirewall  func(string, Ports) error
-	RevokePeer     func(protocol.AgentProfile) error
+	// RevokePeer removes a member's WireGuard peer and its firewall state.
+	RevokePeer func(protocol.AgentProfile) error
 }
 
 func Register(svc *hubconn.Service, options Options) error {
-	if svc == nil || options.Store == nil || options.Registry == nil {
+	if svc == nil || options.Registry == nil {
 		return errors.New("netapi: incomplete options")
 	}
 	permission := func(name string) hubconn.Settings {
 		return hubconn.Settings{Permissions: &hubconn.Permissions{Group: "Hub Network", Name: name}}
 	}
-	svc.Post(PortsUpdatePath, func(body channelgo.Body) (any, error) {
-		var request UpdatePorts
-		if err := decode(body.Body, &request); err != nil {
-			return nil, err
-		}
-		targets := append([]string(nil), request.Users...)
-		if request.Users == nil {
-			options.Registry.mu.RLock()
-			for id := range options.Registry.profiles {
-				targets = append(targets, id)
-			}
-			options.Registry.mu.RUnlock()
-		}
-		previousState := options.Store.Snapshot()
-		previousPorts := map[string]Ports{}
-		for _, id := range targets {
-			previousPorts[id] = options.Store.Effective(id)
-		}
-		if err := options.Store.Apply(request, options.Registry.Exists); err != nil {
-			return nil, err
-		}
-		if options.ApplyFirewall != nil {
-			for index, id := range targets {
-				if err := options.ApplyFirewall(id, options.Store.Effective(id)); err != nil {
-					options.Store.Restore(previousState)
-					for _, rollbackID := range targets[:index] {
-						_ = options.ApplyFirewall(rollbackID, previousPorts[rollbackID])
-					}
-					return nil, err
-				}
-			}
-		}
-		return nil, nil
+	svc.Post(PortsUpdatePath, func(channelgo.Body) (any, error) {
+		return nil, errPortGrantsRetired
 	}, permission("Open and close ports"))
 	svc.Stream(UsersPath, snapshotStream(func() any { return users(options) }), permission("View connected devices"))
 	svc.Stream(InfoPath, snapshotStream(func() any {
 		ipv4, ipv6 := options.AgentAddresses()
-		ports := options.Store.Global()
-		return NetInfo{ID: options.AgentID(), IP: ipv4, IPv6: ipv6, Online: options.NodeOnline(), TCP: ports.TCP, UDP: ports.UDP, VPN: options.VPN()}
+		return NetInfo{ID: options.AgentID(), IP: ipv4, IPv6: ipv6, Online: options.NodeOnline(), TCP: []uint16{}, UDP: []uint16{}, VPN: options.VPN()}
 	}), permission("Read network"))
 	svc.Post(RevokePath, func(body channelgo.Body) (any, error) {
 		id, ok := body.Body.(string)
 		if !ok || id == "" {
-			return nil, errors.New("net/revoke requires service key")
+			return nil, errors.New("net/revoke requires a member key")
 		}
-		options.Registry.mu.RLock()
-		profile, ok := options.Registry.profiles[id]
-		options.Registry.mu.RUnlock()
+		profile, ok := options.Registry.Profile(id)
 		if !ok {
 			return nil, errors.New("unknown user")
 		}
-		previousPorts := options.Store.Effective(id)
-		if options.ApplyFirewall != nil {
-			if err := options.ApplyFirewall(id, Ports{}); err != nil {
-				return nil, err
-			}
-		}
 		if options.RevokePeer != nil {
 			if err := options.RevokePeer(profile); err != nil {
-				if options.ApplyFirewall != nil {
-					_ = options.ApplyFirewall(id, previousPorts)
-				}
 				return nil, err
 			}
-		}
-		if err := options.Store.Revoke(id); err != nil {
-			return nil, err
 		}
 		if err := options.Registry.Remove(id); err != nil {
 			return nil, err
@@ -260,7 +225,6 @@ func users(o Options) []NetUser {
 			continue
 		}
 		u := usage[p.WireGuardKey]
-		ports := o.Store.User(id)
 		ip := ""
 		for _, address := range p.OverlayAddresses {
 			if parsed := net.ParseIP(address); parsed != nil && parsed.To4() != nil {
@@ -273,7 +237,7 @@ func users(o Options) []NetUser {
 			// hub-pro reports when the member last connected.
 			lastUsed, _ = time.Parse(time.RFC3339Nano, p.ConnectedAt)
 		}
-		out = append(out, NetUser{ID: id, IP: ip, LastUsed: lastUsed, Online: p.Online || u.Online, TCP: ports.TCP, UDP: ports.UDP})
+		out = append(out, NetUser{ID: id, IP: ip, LastUsed: lastUsed, Online: p.Online || u.Online, TCP: []uint16{}, UDP: []uint16{}})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
 	return out
@@ -301,4 +265,36 @@ func decode(value any, target any) error {
 		return err
 	}
 	return json.Unmarshal(encoded, target)
+}
+
+// atomicWriteFile durably replaces path through a same-directory temp file,
+// fsync, and rename so a crash mid-write never leaves a truncated revocation
+// file behind.
+func atomicWriteFile(path string, data []byte, mode os.FileMode) error {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(dir, "."+filepath.Base(path)+".tmp-*")
+	if err != nil {
+		return err
+	}
+	name := tmp.Name()
+	defer func() { _ = os.Remove(name) }()
+	if err := tmp.Chmod(mode); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(name, path)
 }

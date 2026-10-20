@@ -153,17 +153,13 @@ say "--- ports"
 D exec -d hn-owner sh -c 'while true; do echo hello | nc -l -N 8080 >/dev/null 2>&1; done'
 sleep 1
 refute "port 8080 closed by default" hn-joiner nc -z -w3 "$owner_ip" 8080
-agent post net/ports/update '{"update":[{"port":8080,"udp":false}]}' >/dev/null || true
-check_eventually "global grant opens 8080" hn-joiner nc -z -w3 "$owner_ip" 8080
+retired=$(agent post net/ports/update '{"update":[{"port":8080,"udp":false}]}' 2>&1 || true)
+if printf '%s' "$retired" | grep -q "port grants are retired"; then say "PASS net/ports/update is refused"; else say "FAIL net/ports/update: $retired"; failed=1; fi
+refute "the retired port grant opens nothing" hn-joiner nc -z -w3 "$owner_ip" 8080
 users=$(agent stream net/users || true)
 say "net/users: $users"
-agent post net/ports/update '{"set":[]}' >/dev/null || true
-check_eventually "clearing the global grant closes 8080" hn-joiner sh -c "! nc -z -w3 $owner_ip 8080"
 joiner_key=$(printf '%s' "$users" | python3 -c 'import json,sys; print(json.load(sys.stdin)[0]["id"])' 2>/dev/null || true)
-if [[ -n $joiner_key ]]; then
-  agent post net/ports/update "{\"users\":[\"$joiner_key\"],\"update\":[{\"port\":8080,\"udp\":false}]}" >/dev/null || true
-  check_eventually "per-user grant opens 8080 for the joiner" hn-joiner nc -z -w3 "$owner_ip" 8080
-else
+if [[ -z $joiner_key ]]; then
   say "FAIL net/users did not list the joiner"; failed=1
 fi
 
@@ -173,7 +169,7 @@ D exec hn-other hub-net -state-dir /var/lib/hub-net join "$second_invite" >/dev/
 other_ip=$(D exec hn-other sh -c "ip -4 -br addr show dev hubnet0" | tr ' ' '\n' | grep '^100\.9[6-9]' | cut -d/ -f1 | head -1)
 say "second member $other_ip"
 check_eventually "second member reaches hub-pro" hn-other nc -z -w3 "$owner_ip" 1997
-refute "per-user grant is not shared with the second member" hn-other nc -z -w3 "$owner_ip" 8080
+refute "port 8080 stays closed for the second member" hn-other nc -z -w3 "$owner_ip" 8080
 refute "members cannot reach each other directly" hn-other ping -c1 -W2 "$joiner_ip"
 
 say "--- restarts"

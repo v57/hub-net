@@ -37,13 +37,14 @@ VMs; the Mac is `.1` on that subnet.
 ```
 
 Checks: traffic both ways and hub-pro (`:1997`) over the overlay; single-use
-invitation; port grants (closed by default, global open/close, per-user grant
-not shared with another member); members cannot reach each other; restart of
-the joiner daemon, the owner daemon and hub-pro; revoke; leave.
+invitation; ports stay closed (agent-local port grants are retired:
+`net/ports/update` is refused and opens nothing); `net/users` lists the
+joiner; members cannot reach each other; restart of the joiner daemon, the
+owner daemon and hub-pro; revoke; leave.
 
 `hubctl` (`agent/integration/hubctl`) plays the owner's app: it sets the
 node endpoint, approves the agent's APIs (`hub/host/pending`), requests
-invitations and calls the agent (`hubctl agent post net/ports/update '{...}'`).
+invitations and calls the agent (`hubctl agent stream net/users`).
 
 ## Mac joiner
 
