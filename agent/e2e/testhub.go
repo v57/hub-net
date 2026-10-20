@@ -76,6 +76,7 @@ type TestHub struct {
 	devices  bool
 	members  map[string]string
 	connects []Connect
+	revoked  []map[string]any
 }
 
 // Connect records one connection's auth version and device attachment.
@@ -349,6 +350,18 @@ func (h *TestHub) registerHandlers() {
 	h.ch.Post("hub/profile/update", func(body channelgo.Body) (any, error) {
 		return "ok", nil
 	})
+	h.ch.Stream("network/agents/list", func(body channelgo.Body, emit channelgo.StreamEmitter) error {
+		if !h.devices {
+			return fmt.Errorf("api not found")
+		}
+		return h.streamSnapshot(emit, h.agentsLocked)
+	})
+	h.ch.Stream("network/devices/revoked", func(body channelgo.Body, emit channelgo.StreamEmitter) error {
+		if !h.devices {
+			return fmt.Errorf("api not found")
+		}
+		return h.streamSnapshot(emit, func() any { return append([]map[string]any{}, h.revoked...) })
+	})
 	h.ch.Post("hub/net/bind", func(body channelgo.Body) (any, error) {
 		return h.handleAgentRegister(body)
 	})
@@ -369,6 +382,43 @@ func (h *TestHub) registerHandlers() {
 		}
 		return "https://files.hub.invalid/object?signature=test", nil
 	})
+}
+
+// streamSnapshot emits value() once and ends the stream. channel-go's server
+// sends only from its own loop, so the double can't push later changes on an
+// open stream; tests reconnect agents (Restart) to deliver a new snapshot,
+// which hub-pro would push on the open stream.
+func (h *TestHub) streamSnapshot(emit channelgo.StreamEmitter, value func() any) error {
+	h.mu.Lock()
+	current := value()
+	h.mu.Unlock()
+	return emit.Emit(current)
+}
+
+func (h *TestHub) agentsLocked() any {
+	profiles := make([]map[string]any, 0, len(h.profiles))
+	for _, prof := range h.profiles {
+		profiles = append(profiles, map[string]any{
+			"version": protocol.WireVersion, "key": prof.key, "wireGuardKey": prof.wireGuardKey,
+			"overlayAddresses": []string{prof.overlayV4, prof.overlayV6},
+			"connectedAt":      time.Now().UTC().Format(time.RFC3339Nano), "online": true,
+		})
+	}
+	return profiles
+}
+
+// RevokeDevice removes a device member, as hub/device/revoke does, and lists
+// its WireGuard key on network/devices/revoked (sent on the next subscribe).
+func (h *TestHub) RevokeDevice(member string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	entry := map[string]any{"device": strings.TrimPrefix(member, "device:"), "wireGuardKeys": []string{},
+		"at": time.Now().UTC().Format(time.RFC3339)}
+	if prof := h.profiles[member]; prof != nil {
+		entry["wireGuardKeys"] = []string{prof.wireGuardKey}
+		delete(h.profiles, member)
+	}
+	h.revoked = append(h.revoked, entry)
 }
 
 func (h *TestHub) handleAgentRegister(body channelgo.Body) (any, error) {

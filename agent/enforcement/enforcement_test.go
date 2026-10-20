@@ -254,3 +254,44 @@ func validGrant(now time.Time, networkProtocol string) protocol.ConnectionGrant 
 		ExpiresAt: now.Add(time.Minute).Format(time.RFC3339Nano),
 	}
 }
+
+func TestRevokeSourcesDropsThePeersRulesOnly(t *testing.T) {
+	now := time.Now().UTC()
+	backend := &MemoryBackend{}
+	manager, _ := New(backend)
+	manager.now = func() time.Time { return now }
+	revoked := validGrant(now, "tcp")
+	kept := validGrant(now, "tcp")
+	kept.CallerAddress = "100.96.0.4"
+	for _, grant := range []protocol.ConnectionGrant{revoked, kept} {
+		if err := manager.Authorize(grant); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := manager.ReplaceManual("device:lost", []string{"100.96.0.3"}, []string{"100.96.0.2"}, ManualPorts{TCP: []uint16{22}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.AllowControl([]string{"100.96.0.2"}, 1997); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.RevokeSources([]netip.Addr{netip.MustParseAddr("100.96.0.3")}); err != nil {
+		t.Fatal(err)
+	}
+	source := netip.MustParseAddr("100.96.0.3")
+	destination := netip.MustParseAddr("100.96.0.2")
+	if backend.Allowed("tcp", source, destination, 9001, now) || backend.Allowed("tcp", source, destination, 22, now) {
+		t.Fatal("revoked source still allowed")
+	}
+	if !backend.Allowed("tcp", netip.MustParseAddr("100.96.0.4"), destination, 9001, now) {
+		t.Fatal("other caller lost its grant")
+	}
+	if !backend.Allowed("tcp", netip.MustParseAddr("100.96.0.9"), destination, 1997, now) {
+		t.Fatal("hub control rule removed")
+	}
+	if got := backend.Terminated(); len(got) != 2 {
+		t.Fatalf("terminated = %v, want the grant resource and the manual rule", got)
+	}
+	if err := manager.RevokeSources(nil); err != nil {
+		t.Fatal(err)
+	}
+}

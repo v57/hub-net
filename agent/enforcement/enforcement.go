@@ -219,6 +219,43 @@ func (m *Manager) UpdateGeneration(resourceID string, generation uint64, immedia
 	return nil
 }
 
+// RevokeSources removes every rule (grant or manual) whose source is one of
+// addresses, for a revoked or removed peer, and terminates the established
+// flows of the resources those rules covered.
+func (m *Manager) RevokeSources(addresses []netip.Addr) error {
+	if len(addresses) == 0 {
+		return nil
+	}
+	sources := make(map[netip.Addr]struct{}, len(addresses))
+	for _, address := range addresses {
+		sources[address.Unmap()] = struct{}{}
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	previousRules := cloneRules(m.rules)
+	m.pruneLocked()
+	resources := map[string]struct{}{}
+	for key, rule := range m.rules {
+		if _, ok := sources[rule.Source.Unmap()]; ok {
+			resources[rule.ResourceID] = struct{}{}
+			delete(m.rules, key)
+		}
+	}
+	if len(resources) == 0 {
+		return nil
+	}
+	if err := m.applyLocked(); err != nil {
+		m.rules = previousRules
+		return fmt.Errorf("enforcement: revoke sources: %w", err)
+	}
+	for resourceID := range resources {
+		if err := m.backend.TerminateResource(resourceID); err != nil {
+			return fmt.Errorf("enforcement: terminate flows: %w", err)
+		}
+	}
+	return nil
+}
+
 // PruneExpired removes expired authorization from the platform firewall.
 // Callers should invoke this from their runtime expiry timer even when no new
 // grants or generation updates arrive.

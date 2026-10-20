@@ -98,8 +98,17 @@ type Agent struct {
 	// memberProfiles is the latest network/agents/list snapshot and
 	// memberPeers the member WireGuard peers installed from it (hub host
 	// agent only), keyed by base64 WireGuard key. Guarded by mu.
-	memberProfiles   []protocol.AgentProfile
-	memberPeers      map[string][]netip.Prefix
+	memberProfiles []protocol.AgentProfile
+	memberPeers    map[string][]netip.Prefix
+	// revokedPeers holds the base64 WireGuard keys of revoked devices from
+	// network/devices/revoked; revokedMembers their device:<id> member keys.
+	// Neither is ever installed or authorized as a peer. Guarded by mu.
+	revokedPeers   map[string]struct{}
+	revokedMembers map[string]struct{}
+	// peerSources remembers the overlay addresses seen for each WireGuard
+	// key (member lists, authorized grants), so a revocation that arrives
+	// after the member left the list still finds its firewall rules.
+	peerSources      map[string][]netip.Addr
 	interfaceName    string
 	initialPeers     []wireguard.PeerConfig
 	candidateChecker connection.CandidateChecker
@@ -441,6 +450,7 @@ func (a *Agent) Run(ctx context.Context) (err error) {
 				return
 			}
 			go a.watchNetUsers(runCtx, sender)
+			go a.watchRevokedDevices(runCtx, sender)
 			if err := a.configureInterface(); err != nil {
 				a.resolver.Deactivate()
 				a.profile.SetState(profile.StateUnregistered)
@@ -804,6 +814,11 @@ func (a *Agent) watchNetUsers(ctx context.Context, sender *channelgo.Sender) {
 		a.netUsers.Replace(profiles)
 		a.mu.Lock()
 		a.memberProfiles = profiles
+		for _, profile := range profiles {
+			for _, prefix := range overlayPrefixes(profile.OverlayAddresses) {
+				a.rememberPeerSourceLocked(profile.WireGuardKey, prefix.Addr())
+			}
+		}
 		a.mu.Unlock()
 		a.syncMemberPeers(ctx, profiles)
 		if a.enforcementMgr == nil || a.netPorts == nil {
@@ -862,6 +877,9 @@ func (a *Agent) syncMemberPeers(ctx context.Context, profiles []protocol.AgentPr
 		}
 		if !a.netUsers.Exists(profile.Key) {
 			continue // revoked with net/revoke
+		}
+		if a.isRevokedPeer(profile.Key, profile.WireGuardKey) {
+			continue // revoked device
 		}
 		key, err := base64.StdEncoding.DecodeString(profile.WireGuardKey)
 		if err != nil || len(key) != 32 {
@@ -960,6 +978,131 @@ func (a *Agent) ownAddresses() []string {
 	}
 	self, _ := a.profileID.PublicKeyBase64()
 	return a.netUsers.Addresses(self)
+}
+
+// RevokedDevice is one entry of the network/devices/revoked stream.
+type RevokedDevice struct {
+	Device        string   `json:"device"`
+	WireGuardKeys []string `json:"wireGuardKeys"`
+	At            string   `json:"at"`
+}
+
+// watchRevokedDevices mirrors network/devices/revoked, the full list of
+// revoked devices of this hub (Docs/Devices/protocol.md section 10). Hubs
+// without the stream end it at once.
+func (a *Agent) watchRevokedDevices(ctx context.Context, sender *channelgo.Sender) {
+	values := sender.Values("network/devices/revoked", nil)
+	defer values.Return()
+	for {
+		item, err := values.Next(ctx)
+		if err != nil || item.Done {
+			return
+		}
+		encoded, err := json.Marshal(item.Value)
+		if err != nil {
+			continue
+		}
+		var revoked []RevokedDevice
+		if json.Unmarshal(encoded, &revoked) != nil {
+			continue
+		}
+		a.ApplyRevokedDevices(revoked)
+	}
+}
+
+// ApplyRevokedDevices drops the WireGuard peers of revoked devices with every
+// firewall rule sourced from their overlay addresses, and refuses them as
+// peers from then on.
+func (a *Agent) ApplyRevokedDevices(revoked []RevokedDevice) {
+	peers := map[string]struct{}{}
+	members := map[string]struct{}{}
+	for _, device := range revoked {
+		if device.Device != "" {
+			members["device:"+device.Device] = struct{}{}
+		}
+		for _, key := range device.WireGuardKeys {
+			if key != "" {
+				peers[key] = struct{}{}
+			}
+		}
+	}
+	remove := make(map[string]struct{}, len(peers))
+	for key := range peers {
+		remove[key] = struct{}{}
+	}
+	a.mu.Lock()
+	a.revokedPeers = peers
+	a.revokedMembers = members
+	profiles := a.memberProfiles
+	// syncMemberPeers reads the previous map unlocked, so replace it.
+	kept := make(map[string][]netip.Prefix, len(a.memberPeers))
+	for key, prefixes := range a.memberPeers {
+		if _, ok := peers[key]; !ok {
+			kept[key] = prefixes
+		}
+	}
+	a.memberPeers = kept
+	a.mu.Unlock()
+
+	var sources []netip.Addr
+	for _, profile := range profiles {
+		if !a.isRevokedPeer(profile.Key, profile.WireGuardKey) {
+			continue
+		}
+		if profile.WireGuardKey != "" {
+			remove[profile.WireGuardKey] = struct{}{}
+		}
+		for _, prefix := range overlayPrefixes(profile.OverlayAddresses) {
+			sources = append(sources, prefix.Addr())
+		}
+	}
+	a.mu.Lock()
+	for key := range remove {
+		sources = append(sources, a.peerSources[key]...)
+	}
+	a.mu.Unlock()
+	for key := range remove {
+		raw, err := base64.StdEncoding.DecodeString(key)
+		if err != nil || len(raw) != 32 {
+			continue
+		}
+		if a.connections != nil {
+			_ = a.connections.Remove(raw)
+		}
+		_ = a.adapter.RemovePeer(raw)
+	}
+	if a.enforcementMgr != nil {
+		if err := a.enforcementMgr.RevokeSources(sources); err != nil {
+			a.logger.Error("revoke device firewall rules", slog.String("err", err.Error()))
+		}
+	}
+}
+
+func (a *Agent) rememberPeerSourceLocked(wireGuardKey string, address netip.Addr) {
+	if wireGuardKey == "" || !address.IsValid() {
+		return
+	}
+	if a.peerSources == nil {
+		a.peerSources = map[string][]netip.Addr{}
+	}
+	for _, known := range a.peerSources[wireGuardKey] {
+		if known == address {
+			return
+		}
+	}
+	a.peerSources[wireGuardKey] = append(a.peerSources[wireGuardKey], address)
+}
+
+// isRevokedPeer reports whether a member key or WireGuard key belongs to a
+// revoked device.
+func (a *Agent) isRevokedPeer(memberKey, wireGuardKey string) bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if _, ok := a.revokedMembers[memberKey]; ok && memberKey != "" {
+		return true
+	}
+	_, ok := a.revokedPeers[wireGuardKey]
+	return ok && wireGuardKey != ""
 }
 
 // memberPeerAddresses returns a member's permanent overlay prefixes by
@@ -1486,6 +1629,9 @@ func (a *Agent) ConnectToShare(ctx context.Context, resourceID, preferredProvide
 	if err := a.ensureConnectionManager(); err != nil {
 		return protocol.ConnectionGrant{}, err
 	}
+	if a.isRevokedPeer(grantValue.TargetKey, grantValue.TargetWireGuardKey) {
+		return grantValue, errRevokedPeer
+	}
 	if err := a.connections.Connect(ctx, grantValue, candidates); err != nil {
 		return grantValue, fmt.Errorf("hubnet: establish connection: %w", err)
 	}
@@ -1501,8 +1647,19 @@ func (a *Agent) AuthorizeFlow(grantValue protocol.ConnectionGrant) error {
 	if a.enforcementMgr == nil {
 		return enforcement.ErrPlatformUnsupported
 	}
+	if a.isRevokedPeer(grantValue.CallerKey, grantValue.CallerWireGuardKey) {
+		return errRevokedPeer
+	}
+	if source, err := netip.ParseAddr(grantValue.CallerAddress); err == nil {
+		a.mu.Lock()
+		a.rememberPeerSourceLocked(grantValue.CallerWireGuardKey, source)
+		a.mu.Unlock()
+	}
 	return a.enforcementMgr.Authorize(grantValue)
 }
+
+// errRevokedPeer refuses a grant whose other end is a revoked device.
+var errRevokedPeer = errors.New("hubnet: peer device is revoked")
 
 // failClosedCandidateChecker rejects every candidate. Until the real UDP
 // reachability path (HN-308) lands, a default-less agent never opens a data

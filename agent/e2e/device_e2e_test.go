@@ -2,6 +2,8 @@ package e2e
 
 import (
 	"context"
+	"encoding/base64"
+	"net/netip"
 	"path/filepath"
 	"testing"
 	"time"
@@ -146,4 +148,92 @@ func TestAgentE2ESecondEndpointOnDeviceIsRefused(t *testing.T) {
 	if hub.RegistrationCount(member) != 1 || hub.MemberKey(secondService) != "" {
 		t.Fatalf("binds %d, second bound as %q", hub.RegistrationCount(member), hub.MemberKey(secondService))
 	}
+}
+
+func restart(t *testing.T, hub *TestHub) {
+	t.Helper()
+	if err := hub.Restart(); err != nil {
+		t.Fatalf("restart hub: %v", err)
+	}
+}
+
+func hasPeer(s *agentSide, wireGuardKey string) bool {
+	state, _ := s.agent.Adapter().State()
+	for _, peer := range state.Peers {
+		if base64.StdEncoding.EncodeToString(peer.PublicKey) == wireGuardKey {
+			return true
+		}
+	}
+	return false
+}
+
+// TestAgentE2ERevokedDeviceIsDropped revokes the caller's device: the hub
+// host's agent drops its member peer and the firewall rules of its grant and
+// refuses its grants from then on; revoking the provider makes the caller
+// drop its outbound peer.
+func TestAgentE2ERevokedDeviceIsDropped(t *testing.T) {
+	hub, err := NewDeviceTestHub()
+	if err != nil {
+		t.Fatalf("NewDeviceTestHub: %v", err)
+	}
+	defer hub.Close()
+	devices := t.TempDir()
+	provider := startDeviceAgent(t, hub.Port(), "provider", filepath.Join(devices, "provider.key"))
+	caller := startDeviceAgent(t, hub.Port(), "caller", filepath.Join(devices, "caller.key"))
+	providerMember := "device:" + provider.agent.DeviceID()
+	callerMember := "device:" + caller.agent.DeviceID()
+	waitFor(t, "device members", func() bool {
+		return hub.RegistrationCount(providerMember) > 0 && hub.RegistrationCount(callerMember) > 0
+	})
+	provider.waitRegistered(t, "provider")
+	caller.waitRegistered(t, "caller")
+	callerWireGuard := base64.StdEncoding.EncodeToString(caller.agent.Profile().WireGuardPublicKey())
+	providerWireGuard := base64.StdEncoding.EncodeToString(provider.agent.Profile().WireGuardPublicKey())
+
+	// The hub host's agent (machine binding) keeps a peer per member. The
+	// test hub sends member lists on subscribe, so reconnect the agents.
+	restart(t, hub)
+	waitFor(t, "member peer on the hub host", func() bool { return hasPeer(provider, callerWireGuard) })
+
+	const port = 2222
+	resourceID := provider.publishShare(t, "ssh", "tcp", port)
+	caller.agent.SetResourceGeneration(resourceID, 1)
+	provider.agent.SetResourceGeneration(resourceID, 1)
+	candidates := []protocol.Candidate{{
+		Version: protocol.WireVersion, CandidateID: "cand-revoke", SessionID: "sess-revoke",
+		Key: providerMember, Kind: "host", Transport: "udp",
+		Address: "198.51.100.41", Port: 51820, Priority: 100,
+		ExpiresAt: time.Now().Add(time.Minute).Format(time.RFC3339Nano),
+	}}
+	grant, err := caller.agent.ConnectToShare(context.Background(), resourceID, "", candidates)
+	if err != nil {
+		t.Fatalf("ConnectToShare: %v", err)
+	}
+	if err := provider.agent.AuthorizeFlow(grant); err != nil {
+		t.Fatalf("AuthorizeFlow: %v", err)
+	}
+	source := netip.MustParseAddr(grant.CallerAddress)
+	destination := netip.MustParseAddr(grant.DestinationAddress)
+	if !provider.backend.Allowed("tcp", source, destination, port, time.Now()) {
+		t.Fatal("authorized flow not allowed")
+	}
+
+	hub.RevokeDevice(callerMember)
+	restart(t, hub)
+	waitFor(t, "revoked caller dropped", func() bool {
+		return !hasPeer(provider, callerWireGuard) && !provider.backend.Allowed("tcp", source, destination, port, time.Now())
+	})
+	if err := provider.agent.AuthorizeFlow(grant); err == nil {
+		t.Fatal("grant from a revoked device authorized")
+	}
+	if hasPeer(provider, callerWireGuard) {
+		t.Fatal("revoked device reinstalled as a member peer")
+	}
+
+	if !hasPeer(caller, providerWireGuard) {
+		t.Fatal("caller has no outbound peer to the provider")
+	}
+	hub.RevokeDevice(providerMember)
+	restart(t, hub)
+	waitFor(t, "caller drops the revoked provider", func() bool { return !hasPeer(caller, providerWireGuard) })
 }
