@@ -19,6 +19,13 @@
 # bootstrap (1965/udp) ports on the Mac's LAN address and has the owner
 # advertise it. A Mac joiner needs this: a packet tunnel provider's own sockets
 # are scoped to the physical interface, so it cannot reach the VM network.
+#
+# HUBNET_HUB=swift runs the Swift hub (Core/HubServer, hub-server-swift) on the
+# Mac instead of hub-server in hn-owner (HUBNET_HUB_PORT, 1997 by default).
+# hn-owner still runs the owner's agent: socat forwards its :1997 (local and on
+# the overlay) to the Mac hub through host.docker.internal, which the hub sees
+# as 127.0.0.1, and publishes the agent's proof socket as :1966, which the hub
+# reads as its machine agent (--net-agent tcp://127.0.0.1:1966).
 set -euo pipefail
 
 here=$(cd "$(dirname "$0")" && pwd)
@@ -35,10 +42,21 @@ if [[ -n ${HUBNET_LAN:-} ]]; then
 fi
 bin=$here/bin
 state=$here/state
+swift_hub=""
+if [[ ${HUBNET_HUB:-} == swift ]]; then swift_hub=1; fi
+hub_port=${HUBNET_HUB_PORT:-1997}
 D() { docker --context "$context" "$@"; }
 say() { echo "[hubnet] $*"; }
 
+stop_swift_hub() {
+  if [[ -f $state/mac-hub.pid ]]; then
+    kill "$(cat "$state/mac-hub.pid")" 2>/dev/null || true
+    rm -f "$state/mac-hub.pid"
+  fi
+}
+
 down() {
+  stop_swift_hub
   D rm -f hn-node hn-owner hn-joiner hn-other >/dev/null 2>&1 || true
   # A host-network owner leaves its interface and firewall in the VM itself.
   colima ssh -p "${context#colima-}" -- sh -c \
@@ -55,6 +73,10 @@ mkdir -p "$bin"
 (cd "$hub/Network/hub-net/agent" && GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -o "$bin/hub-net" ./cmd/hub-net \
   && GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -o "$bin/hubctl" ./integration/hubctl)
 (cd "$hub/Network/hub-net-node" && GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -o "$bin/hub-net-node" ./cmd/hub-net-node)
+if [[ -n $swift_hub ]]; then
+  say "building hub-server-swift"
+  (cd "$hub/Core/HubServer" && swift build --product hub-server-swift >/dev/null)
+fi
 D build -q -t hubnet-dev "$here" >/dev/null
 
 down
@@ -74,6 +96,7 @@ host() {
   local network=(--network hubnet-lan --sysctl net.ipv4.ip_forward=1 --sysctl net.ipv6.conf.all.disable_ipv6=0)
   if [[ $1 == hn-owner && ${HUBNET_OWNER_NETWORK:-} == host ]]; then network=(--network host); fi
   if [[ $1 == hn-owner && -n $lan_ip ]]; then network+=(-p 51820:51820/udp -p 1965:1965/udp); fi
+  if [[ $1 == hn-owner && -n $swift_hub ]]; then network+=(--add-host host.docker.internal:host-gateway -p 1966:1966/tcp); fi
   D run -d --name "$1" --hostname "${1#hn-}" "${network[@]}" \
     --cap-add NET_ADMIN --cap-add NET_RAW \
     -v "$hub:/hub" -v "$bin:/opt/bin:ro" -v "$state/${1#hn-}:/state" \
@@ -94,11 +117,36 @@ wait_for() {
 }
 
 owner_key=$(D exec hn-owner hubctl -identity /state/owner.identity key)
-say "starting hub-server on hn-owner (owner ${owner_key:0:24}...)"
-D exec -d -w /state/hub-server -e HUBOWNER="$owner_key" -e HUBLISTEN=0.0.0.0:1997 hn-owner \
-  sh -c 'bun /hub/Core/hub-server/index.ts > /state/hub-server.log 2>&1'
-wait_for "hub-server :1997" D exec hn-owner nc -z 127.0.0.1 1997
+start_hub() {
+  if [[ -n $swift_hub ]]; then
+    mkdir -p "$state/mac-hub"
+    HUBOWNER="$owner_key" HUB_DEVICE_KEY="$state/mac-hub/device.key" HUBLISTEN="" HUB_MODE="" \
+      "$hub/Core/HubServer/.build/debug/hub-server-swift" --port "0.0.0.0:$hub_port" --data "$state/mac-hub/data" \
+      --net-agent tcp://127.0.0.1:1966 >> "$state/mac-hub.log" 2>&1 &
+    echo $! > "$state/mac-hub.pid"
+  else
+    D exec -d -w /state/hub-server -e HUBOWNER="$owner_key" -e HUBLISTEN=0.0.0.0:1997 hn-owner \
+      sh -c 'bun /hub/Core/hub-server/index.ts >> /state/hub-server.log 2>&1'
+  fi
+}
+if [[ -n $swift_hub ]]; then
+  say "starting hub-server-swift on the Mac :$hub_port (owner ${owner_key:0:24}...), forwarded by hn-owner"
+  D exec -d hn-owner socat TCP-LISTEN:1997,fork,reuseaddr "TCP:host.docker.internal:$hub_port"
+  D exec -d hn-owner socat TCP-LISTEN:1966,fork,reuseaddr UNIX-CONNECT:/run/hub-net/agent.sock
+else
+  say "starting hub-server on hn-owner (owner ${owner_key:0:24}...)"
+fi
+start_hub
+if [[ -n $swift_hub ]]; then
+  wait_for "hub-server-swift :$hub_port" nc -z 127.0.0.1 "$hub_port"
+else
+  wait_for "hub-server :1997" D exec hn-owner nc -z 127.0.0.1 1997
+fi
 D exec hn-owner hubctl -identity /state/owner.identity node-set "ws://$node_ip:1964"
+# Members name their membership after the hub (hub/header): hub-server in hn-owner is "owner", its hostname
+if [[ -n $swift_hub ]]; then
+  D exec hn-owner hubctl -identity /state/owner.identity post hub/header/set '{"name":"owner"}' >/dev/null
+fi
 
 start_daemon() {
   local flags=""
@@ -183,9 +231,8 @@ check_eventually "joiner daemon restart: hub-server reachable again" hn-joiner n
 restart_daemon hn-owner
 check_eventually "owner daemon restart: joiner reaches hub-server" hn-joiner nc -z -w3 "$owner_ip" 1997
 check_eventually "owner daemon restart: owner reaches joiner" hn-owner ping -c1 -W2 "$joiner_ip"
-D exec hn-owner pkill -x bun || true
-D exec -d -w /state/hub-server -e HUBOWNER="$owner_key" -e HUBLISTEN=0.0.0.0:1997 hn-owner \
-  sh -c 'bun /hub/Core/hub-server/index.ts >> /state/hub-server.log 2>&1'
+if [[ -n $swift_hub ]]; then stop_swift_hub; else D exec hn-owner pkill -x bun || true; fi
+start_hub
 check_eventually "hub-server restart: joiner reconnects" hn-joiner sh -c "hub-net -state-dir /var/lib/hub-net list | grep -q connected && nc -z -w3 $owner_ip 1997"
 check_eventually "hub-server restart: owner reaches joiner" hn-owner ping -c1 -W2 "$joiner_ip"
 check_eventually "after restarts: second member reaches hub-server" hn-other nc -z -w3 "$owner_ip" 1997
@@ -211,5 +258,6 @@ D exec hn-other hub-net -state-dir /var/lib/hub-net leave owner >/dev/null || tr
 refute "leaving removes the interface" hn-other ip link show hubnet0
 check "leaving clears the membership" hn-other sh -c "test -z \"\$(hub-net -state-dir /var/lib/hub-net list)\""
 
+stop_swift_hub
 say "logs in $state"
 exit $failed

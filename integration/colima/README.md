@@ -48,6 +48,19 @@ member `device:<id>`.
 node endpoint, approves the agent's APIs (`hub/host/pending`), requests
 invitations and calls the agent (`hubctl agent stream net/users`).
 
+## Swift hub on the Mac
+
+```sh
+HUBNET_HUB=swift ./up.sh                # same checks against Core/HubServer's hub-server-swift
+```
+
+The Swift hub (`Core/HubServer`) can't run in a Linux container, so it runs on the Mac (`HUBNET_HUB_PORT`, 1997,
+data in `state/mac-hub/`) and `hn-owner` keeps the owner's agent. `socat` in `hn-owner` forwards `:1997` (on
+localhost and the overlay) to the Mac through `host.docker.internal`, which the hub sees as `127.0.0.1`, and
+publishes the agent's proof socket (`/run/hub-net/agent.sock`) as `:1966`, which the hub uses as its machine agent
+(`--net-agent tcp://127.0.0.1:1966`). The owner names the hub `owner` (`hub/header/set`), as hub-server's hostname
+in `hn-owner` would.
+
 ## Mac joiner
 
 A packet tunnel provider's own sockets are scoped to the physical interface
