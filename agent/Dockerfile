@@ -39,5 +39,5 @@ VOLUME ["/var/lib/hub-net"]
 STOPSIGNAL SIGTERM
 ENTRYPOINT ["/usr/local/bin/hub-net"]
 # The command socket stays in the state dir: /run/hub-net/agent.sock is the
-# local agent socket hub-pro uses to prove the hub host's agent.
+# local agent socket hub-server uses to prove the hub host's agent.
 CMD ["-state-dir", "/var/lib/hub-net"]

@@ -234,7 +234,7 @@ func users(o Options) []NetUser {
 		}
 		lastUsed := u.LastUsed
 		if lastUsed.IsZero() {
-			// hub-pro reports when the member last connected.
+			// hub-server reports when the member last connected.
 			lastUsed, _ = time.Parse(time.RFC3339Nano, p.ConnectedAt)
 		}
 		out = append(out, NetUser{ID: id, IP: ip, LastUsed: lastUsed, Online: p.Online || u.Online, TCP: []uint16{}, UDP: []uint16{}})

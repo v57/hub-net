@@ -77,7 +77,7 @@ type Options struct {
 	// Endpoint returns the current hub-net-node rendezvous endpoint. The value
 	// may be a bare host:port or carry an explicit scheme/path (for example
 	// "node.example.com/node"). There is no default node: empty disables
-	// registration until hub-pro's hub/net/node is set.
+	// registration until hub-server's hub/net/node is set.
 	Endpoint func() string
 	// Identity is the agent's service identity. Its public key is registered;
 	// its private key signs the node's challenge.

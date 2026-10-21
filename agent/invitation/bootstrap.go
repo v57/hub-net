@@ -7,7 +7,7 @@
 // signed by the invitation service key (the same key that signed the compact
 // invitation). The response binds to the invitation replay id and the joiner
 // identities, and carries the temporary point-to-point WireGuard addresses
-// the joiner needs to reach hub-pro through the inviter before its ordinary
+// the joiner needs to reach hub-server through the inviter before its ordinary
 // hub/net/bind assigns permanent overlay addresses.
 //
 // The wire structs are shared cross-language in hub-net-node/models (and
@@ -331,7 +331,7 @@ type InviterOptions struct {
 	// May be nil or return nil; responses then carry no endpoints and joiners
 	// must rely on node-observed candidates.
 	Endpoints func() []protocol.BootstrapEndpoint
-	// HubProHost returns the inviter's overlay address where hub-pro listens
+	// HubProHost returns the inviter's overlay address where hub-server listens
 	// on :1997. May be nil.
 	HubProHost func() string
 	// Lifetime bounds a bootstrap response. Defaults to
@@ -575,7 +575,7 @@ func (i *Inviter) buildResponse(request protocol.DirectBootstrapRequest, joinerV
 
 // UpdateJoinerAllowedIPs extends every active temporary peer for
 // joinerServiceKey with additional overlay addresses — the joiner's permanent
-// hub-pro-assigned addresses after its hub/net/bind. The bootstrap addresses
+// hub-server-assigned addresses after its hub/net/bind. The bootstrap addresses
 // remain; the adapter replaces the peer's AllowedIPs with the union so the
 // inviter keeps forwarding the joiner's adopted control traffic. Returns
 // ErrBootstrapReplay when no active peer matches the service key.

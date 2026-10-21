@@ -28,15 +28,15 @@ are absent or current platform lacks production tunnel support.
 
 ## Hub host
 
-On the machine that runs hub-pro, make this agent the hub's local agent once:
+On the machine that runs hub-server, make this agent the hub's local agent once:
 
 ```sh
-hub-net local                    # hub-pro at ws://127.0.0.1:1997
+hub-net local                    # hub-server at ws://127.0.0.1:1997
 hub-net local ws://127.0.0.1:2000
 ```
 
-hub-pro proves the agent is local over `/run/hub-net/agent.sock`, so the user
-running hub-pro must be in the `hub-net` group (or set `HUB_NET_AGENT_SOCKET`).
+hub-server proves the agent is local over `/run/hub-net/agent.sock`, so the user
+running hub-server must be in the `hub-net` group (or set `HUB_NET_AGENT_SOCKET`).
 The owner then approves the agent's `net/*` APIs in Hub App (they stay pending
 until then, like any non-owner service). Only this agent issues invitations;
 other machines join with `hub-net join <invite>`.
@@ -132,6 +132,6 @@ metadata.
 Run final HN-865 scenario on both provisioned hosts:
 
 ```sh
-hub-pro/integration/hn865_release.sh
-sudo hub-pro/integration/hn865_release.sh # Ubuntu
+hub-server/integration/hn865_release.sh
+sudo hub-server/integration/hn865_release.sh # Ubuntu
 ```

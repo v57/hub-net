@@ -84,7 +84,7 @@ type Agent struct {
 	networkUp bool
 
 	// Grant/connection/enforcement wiring (HN-308/310). The verifier is built
-	// lazily from the first signature-verified grant, since hub-pro does not
+	// lazily from the first signature-verified grant, since hub-server does not
 	// expose its signing key over the register path today. The connection
 	// manager is constructed in Prepare from injected or default adapters.
 	connections        *connection.Manager
@@ -167,7 +167,7 @@ type Options struct {
 	InterfaceName string
 	// InitialPeers are installed on the WireGuard interface during
 	// configureInterface (after registration). Joined memberships use them to
-	// keep the inviter peer of the temporary bootstrap link, so the hub-pro
+	// keep the inviter peer of the temporary bootstrap link, so the hub-server
 	// control connection through the inviter survives the interface
 	// reconfiguration that replaces the join-time link.
 	InitialPeers []wireguard.PeerConfig
@@ -189,11 +189,11 @@ type Options struct {
 	// GatewayBackend owns forwarding, firewall, NAT, and flow teardown.
 	GatewayBackend gateway.Backend
 	// OverlayAddress is a joined member's permanent IPv4 overlay address. Such
-	// a member reaches hub-pro only through the tunnel, so the session brings
+	// a member reaches hub-server only through the tunnel, so the session brings
 	// the interface up with it (and InitialPeers) before connecting.
 	OverlayAddress string
 	// BindingKind is sent with hub/net/bind on every connect. Empty means
-	// "machine": the agent on the same host as hub-pro, proven over the local
+	// "machine": the agent on the same host as hub-server, proven over the local
 	// agent socket. Memberships created by an invitation join use "join".
 	BindingKind protocol.LocalAgentBindingKind
 }
@@ -462,7 +462,7 @@ func (a *Agent) Run(ctx context.Context) (err error) {
 				return
 			}
 			if err := a.allowHubControl(); err != nil {
-				a.logger.Error("hub-pro overlay access failed", slog.String("err", err.Error()))
+				a.logger.Error("hub-server overlay access failed", slog.String("err", err.Error()))
 			}
 			a.mu.Lock()
 			profiles := a.memberProfiles
@@ -513,7 +513,7 @@ func (a *Agent) Run(ctx context.Context) (err error) {
 		return fmt.Errorf("hubnet: register control API: %w", err)
 	}
 	// Invitations name the node this agent is registered with, so they follow
-	// hub-pro's hub/net/node setting like the node client does.
+	// hub-server's hub/net/node setting like the node client does.
 	if err := invitation.RegisterInviteService(svc, a.profileID, a.currentNodeEndpoint, func() bool {
 		return a.nodeClient != nil && a.nodeClient.Online()
 	}); err != nil {
@@ -730,7 +730,7 @@ func (a *Agent) Run(ctx context.Context) (err error) {
 			a.logger.Error("dns resolver teardown failed", slog.String("err", err.Error()))
 		}
 	}()
-	// Bring up machine-local IPC before opening the Hub connection. hub-pro
+	// Bring up machine-local IPC before opening the Hub connection. hub-server
 	// challenges this socket while processing hub/net/bind, so
 	// starting Hub first creates a reconnect-sensitive registration race.
 	ipcCtx, ipcCancel := context.WithCancel(runCtx)
@@ -767,7 +767,7 @@ func (a *Agent) Run(ctx context.Context) (err error) {
 		}()
 	}
 	if a.bindingKind == protocol.LocalAgentBindingJoin && a.knownAddress.IsValid() {
-		// hub-pro is reachable only through the overlay; without the tunnel
+		// hub-server is reachable only through the overlay; without the tunnel
 		// the first connect (and so the interface setup in OnConnect) never
 		// happens after a restart.
 		if err := a.bringUpInterface(a.knownAddress); err != nil {
@@ -826,7 +826,7 @@ func (a *Agent) watchNetUsers(ctx context.Context, sender *channelgo.Sender) {
 }
 
 // syncMemberPeers keeps one WireGuard peer per network member on the hub
-// host's agent. Members reach hub-pro and shared ports through this host with
+// host's agent. Members reach hub-server and shared ports through this host with
 // their permanent overlay addresses; a member still inside its bootstrap
 // window also keeps the temporary addresses (the inviter merges them).
 // Joined members' agents only see themselves and do nothing here.
@@ -1100,9 +1100,9 @@ func (a *Agent) advertisedAddress(listener net.IP) string {
 	return listener.String()
 }
 
-// allowHubControl opens hub-pro's port on this host's overlay address when
+// allowHubControl opens hub-server's port on this host's overlay address when
 // this agent serves the hub running on the same machine. Members and joiners
-// reach hub-pro only through the overlay; everything else stays fail-closed.
+// reach hub-server only through the overlay; everything else stays fail-closed.
 func (a *Agent) allowHubControl() error {
 	if a.enforcementMgr == nil || (a.bindingKind != "" && a.bindingKind != protocol.LocalAgentBindingMachine) {
 		return nil
@@ -1115,7 +1115,7 @@ func (a *Agent) allowHubControl() error {
 }
 
 // hubPort extracts the port from a hub address (port number, "host:port" or
-// ws:// URL), defaulting to hub-pro's 1997.
+// ws:// URL), defaulting to hub-server's 1997.
 func hubPort(address any) uint16 {
 	switch value := address.(type) {
 	case int:
@@ -1135,7 +1135,7 @@ func hubPort(address any) uint16 {
 	return config.DefaultHubPort
 }
 
-// currentNodeEndpoint returns the hub-pro advertised hub-net-node endpoint,
+// currentNodeEndpoint returns the hub-server advertised hub-net-node endpoint,
 // falling back to the locally configured node endpoints. Empty disables node
 // registration.
 func (a *Agent) currentNodeEndpoint() string {
@@ -1156,7 +1156,7 @@ func (a *Agent) currentNodeEndpoint() string {
 	return ""
 }
 
-// watchNodeEndpoint mirrors hub-pro's hub/net/node stream so node registrations
+// watchNodeEndpoint mirrors hub-server's hub/net/node stream so node registrations
 // follow operator changes to the configured rendezvous endpoint.
 func (a *Agent) watchNodeEndpoint(ctx context.Context, sender *channelgo.Sender) {
 	values := sender.Values("hub/net/node", nil)
@@ -1648,7 +1648,7 @@ func (failClosedHandshakeChecker) Wait(context.Context, []byte) error {
 	return errors.New("hubnet: handshake checker unavailable")
 }
 
-// grantResponse mirrors the Hub network/connection/grant reply. hub-pro
+// grantResponse mirrors the Hub network/connection/grant reply. hub-server
 // returns the bare ConnectionGrant; we accept either a bare grant or
 // {grant: ConnectionGrant} so future envelopes stay backward compatible.
 type grantResponse struct {
@@ -1656,7 +1656,7 @@ type grantResponse struct {
 }
 
 // decodeGrantResponse normalizes the channel-go response into a
-// protocol.ConnectionGrant. hub-pro returns the bare grant; the in-process
+// protocol.ConnectionGrant. hub-server returns the bare grant; the in-process
 // test hub wraps it under {"grant": ...}. We accept both shapes and the
 // already-typed case (inline transport).
 func decodeGrantResponse(raw any) (protocol.ConnectionGrant, error) {
@@ -1673,7 +1673,7 @@ func decodeGrantResponse(raw any) (protocol.ConnectionGrant, error) {
 	if err != nil {
 		return protocol.ConnectionGrant{}, fmt.Errorf("encode response: %w", err)
 	}
-	// Try wrapped first (test hub), then bare grant (hub-pro).
+	// Try wrapped first (test hub), then bare grant (hub-server).
 	var wrapped grantResponse
 	if err := json.Unmarshal(encoded, &wrapped); err == nil && wrapped.Grant.GrantID != "" {
 		return wrapped.Grant, nil

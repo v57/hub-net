@@ -51,7 +51,7 @@ integration-multi-hub-linux:
 	./integration/multi_hub_linux.sh
 
 integration-hn706-release:
-	../../hub-pro/integration/hn706_release.sh
+	../../hub-server/integration/hn706_release.sh
 
 integration-machine-restart-prepare:
 	HUB_NET_MACHINE_RESTART_ACCEPTANCE=1 ./integration/machine_restart.sh prepare

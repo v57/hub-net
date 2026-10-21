@@ -40,7 +40,7 @@ type JoinFunc func(context.Context, string) (JoinResult, error)
 // its address.
 type LocalFunc func(context.Context, string) (membership.Record, error)
 
-// DefaultLocalHubAddress is the hub-pro address `hub-net local` uses when none
+// DefaultLocalHubAddress is the hub-server address `hub-net local` uses when none
 // is given.
 const DefaultLocalHubAddress = "ws://127.0.0.1:1997"
 

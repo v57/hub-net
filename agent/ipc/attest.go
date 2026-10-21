@@ -315,7 +315,7 @@ func (h *AttestHandler) Status(req StatusRequest) (StatusResponse, error) {
 	}, nil
 }
 
-// BindingProof proves to hub-pro that this exact authenticated agent is
+// BindingProof proves to hub-server that this exact authenticated agent is
 // reachable through machine-local IPC and supports invitation bootstrap.
 func (h *AttestHandler) BindingProof(req BindingProofRequest) (BindingProofResponse, error) {
 	if req.Version != protocol.WireVersion || req.Type != MessageBindingProof {

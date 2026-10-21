@@ -2,7 +2,7 @@
 //
 // The network profile is the access principal for overlay connections (design
 // decision 3). It is distinct from the Hub RPC service identity: the profile
-// is what `hub-pro` authorizes in connection grants, while the service
+// is what `hub-server` authorizes in connection grants, while the service
 // identity authenticates the agent's Hub RPC connection. HN-301 wires profile
 // registration, identity persistence, WireGuard key lifecycle, and Hub
 // reconnect; this scaffold defines the state and a small lifecycle API used

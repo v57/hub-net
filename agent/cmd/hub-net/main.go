@@ -96,7 +96,7 @@ func run(args []string) error {
 		sessionConfig.HubAddress = member.HubAddress
 		sessionConfig.AgentSocketPath = filepath.Join(member.StateDir, "service.sock")
 		if member.Local {
-			// hub-pro proves its machine-local agent over the well-known
+			// hub-server proves its machine-local agent over the well-known
 			// socket (HUB_NET_AGENT_SOCKET, default /run/hub-net/agent.sock).
 			sessionConfig.AgentSocketPath = cfg.AgentSocketPath
 		}
@@ -105,7 +105,7 @@ func run(args []string) error {
 		sessionConfig.AdvertiseAddress = *advertise
 		sessionConfig.DeviceKeyPath = *deviceKey
 		// A joined membership keeps the inviter peer of its temporary
-		// bootstrap link so the hub-pro control connection through the
+		// bootstrap link so the hub-server control connection through the
 		// inviter survives the join-time interface reconfiguration.
 		initialPeers, err := invitation.LoadInviterPeers(filepath.Join(member.StateDir, invitation.InviterPeerFileName))
 		if err != nil {
@@ -261,7 +261,7 @@ func newJoin(store *membership.Store, stateDir string, logger *slog.Logger) (man
 	}, nil
 }
 
-// newLocal builds the `hub-net local` command: a membership for the hub-pro
+// newLocal builds the `hub-net local` command: a membership for the hub-server
 // running on this machine, with a fresh service identity and WireGuard key.
 // Its session binds as the machine-local agent, so it can issue invitations.
 func newLocal(store *membership.Store) management.LocalFunc {

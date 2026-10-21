@@ -7,14 +7,14 @@ the colima `hubnet` profile. It replaces the August harness that needed the
 | Container | Role |
 |---|---|
 | `hn-node` | `hub-net-node` on the VM's own network, `<vm address>:1964` TCP + UDP |
-| `hn-owner` | hub-pro + `hub-net local`: the hub host, issues invitations |
+| `hn-owner` | hub-server + `hub-net local`: the hub host, issues invitations |
 | `hn-joiner` | `hub-net join <invite>` |
 | `hn-other` | second member; also checks that an invitation is single-use |
 
 Hosts share the Docker network `hubnet-lan` (`172.30.0.0/24`). Binaries are
 cross-compiled on the Mac (`bin/`) from `Network/hub-net` and
-`Network/hub-net-node`, and `~/Developer/Hub` is mounted at `/hub` for hub-pro
-(`Core/hub-pro`, whose `node_modules/channel` links to `Channel/channel`), so a
+`Network/hub-net-node`, and `~/Developer/Hub` is mounted at `/hub` for hub-server
+(`Core/hub-server`, whose `node_modules/channel` links to `Channel/channel`), so a
 code change only needs another `./up.sh`. Logs land in `state/<host>/`.
 
 ## Setup (once)
@@ -36,12 +36,12 @@ VMs; the Mac is `.1` on that subnet.
 ./up.sh down     # remove the containers
 ```
 
-Checks: traffic both ways and hub-pro (`:1997`) over the overlay; single-use
+Checks: traffic both ways and hub-server (`:1997`) over the overlay; single-use
 invitation; ports stay closed (agent-local port grants are retired:
 `net/ports/update` is refused and opens nothing); `net/users` lists the
 joiner; members cannot reach each other; restart of the joiner daemon, the
-owner daemon and hub-pro; revoke (`net/revoke`, then `hub/device/revoke` of the
-second member's device); leave. Agents join as devices: hub-pro keys each
+owner daemon and hub-server; revoke (`net/revoke`, then `hub/device/revoke` of the
+second member's device); leave. Agents join as devices: hub-server keys each
 member `device:<id>`.
 
 `hubctl` (`agent/integration/hubctl`) plays the owner's app: it sets the
@@ -58,7 +58,7 @@ it (`hub-net -bootstrap-listen :1965 -advertise-address <lan ip>`):
 
 ```sh
 HUBNET_LAN=1 ./up.sh                    # Linux scenarios still run (21 checks)
-./mac-join.sh path/to/Debug/Hub.app     # join, ping/TCP/RPC to hub-pro, leave
+./mac-join.sh path/to/Debug/Hub.app     # join, ping/TCP/RPC to hub-server, leave
 ```
 
 The Mac needs the "Hub Network" VPN profile approved once, by a build signed

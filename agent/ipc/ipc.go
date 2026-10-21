@@ -96,7 +96,7 @@ type Handler interface {
 	BindingProof(req BindingProofRequest) (BindingProofResponse, error)
 }
 
-// BindingProofRequest is created by hub-pro over machine-local IPC while it
+// BindingProofRequest is created by hub-server over machine-local IPC while it
 // handles hub/net/bind. Socket peer credentials prove locality;
 // nonce and signature bind the active Hub connection and profile identity.
 type BindingProofRequest struct {

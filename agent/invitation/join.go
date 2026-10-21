@@ -5,9 +5,9 @@
 // invitation), learns the inviter's bootstrap endpoint from the paired
 // session, exchanges a signed DirectBootstrapRequest over UDP framing,
 // installs the temporary point-to-point WireGuard link, and binds the joiner
-// identity at hub-pro through the inviter (hub/net/bind with bindingKind
+// identity at hub-server through the inviter (hub/net/bind with bindingKind
 // "join"). The joiner's service key both signs the bootstrap request and
-// authenticates the hub-pro bind, so the inviter and hub-pro see the same
+// authenticates the hub-server bind, so the inviter and hub-server see the same
 // identity.
 package invitation
 
@@ -64,7 +64,7 @@ type JoinOptions struct {
 	ListenPort uint16
 	// Adapter installs and removes the temporary point-to-point link.
 	Adapter wireguard.Adapter
-	// Binder authenticates with hub-pro and issues hub/net/bind. Defaults to
+	// Binder authenticates with hub-server and issues hub/net/bind. Defaults to
 	// the real hubservice binder.
 	Binder Binder
 	// Logger receives progress. Defaults to a discard logger.
@@ -77,7 +77,7 @@ type JoinOptions struct {
 }
 
 // JoinResult is the outcome of a completed join: the inviter's temporary
-// bootstrap link plus the permanent membership issued by hub-pro.
+// bootstrap link plus the permanent membership issued by hub-server.
 type JoinResult struct {
 	// ReplayID is the SHA-256 payload digest (unpadded base64url) of the
 	// compact invitation. It is the transaction id used across the node
@@ -96,7 +96,7 @@ type JoinResult struct {
 	// addresses installed on the bootstrap link.
 	JoinerAddress  protocol.BootstrapAddress
 	InviterAddress protocol.BootstrapAddress
-	// HubProHost is the inviter's overlay address where hub-pro listens on
+	// HubProHost is the inviter's overlay address where hub-server listens on
 	// :1997; the joiner reaches it through the temporary link.
 	HubProHost string
 	// Node is the hub-net-node endpoint from the invitation (scheme included).
@@ -109,15 +109,15 @@ type JoinResult struct {
 	HubName string
 }
 
-// Binder authenticates the joiner at hub-pro through the temporary link and
+// Binder authenticates the joiner at hub-server through the temporary link and
 // issues hub/net/bind with bindingKind "join".
 type Binder interface {
 	// Bind issues the joiner's first hub/net/bind. admission is the
-	// inviter-signed bootstrap response hub-pro requires to admit a new key.
+	// inviter-signed bootstrap response hub-server requires to admit a new key.
 	Bind(ctx context.Context, address any, id *identity.Identity, wireGuardKey, name string, admission protocol.DirectBootstrapResponse) (BindResult, error)
 }
 
-// BindResult is the permanent membership issued by hub-pro.
+// BindResult is the permanent membership issued by hub-server.
 type BindResult struct {
 	HubKey           string
 	HubNetworkID     string
@@ -274,7 +274,7 @@ func Join(ctx context.Context, options JoinOptions) (JoinResult, error) {
 		}
 	}()
 
-	// 4. Bind at hub-pro through the inviter.
+	// 4. Bind at hub-server through the inviter.
 	hubAddress := bootstrapHubAddress(response.HubProHost)
 	logger.Info("invitation join: hub/net/bind", slog.String("hub", hubAddress))
 	binding, err := binder.Bind(joinCtx, hubAddress, options.Identity, wireGuardKeyB64, "hub-net", response)
@@ -577,7 +577,7 @@ func wgEndpoint(response protocol.DirectBootstrapResponse, observed nodeprotocol
 	return net.JoinHostPort(address, strconv.Itoa(int(endpoint.Port))), nil
 }
 
-// bootstrapHubAddress is the hub-pro address the joiner binds through the
+// bootstrapHubAddress is the hub-server address the joiner binds through the
 // temporary link: the inviter's overlay address on port 1997. The Go
 // channel-go client only speaks plain WebSocket, so the scheme is ws://.
 func bootstrapHubAddress(hubProHost string) string {
@@ -609,7 +609,7 @@ func randomID() (string, error) {
 }
 
 // InviterPeer is the persisted inviter peer a joined membership keeps so the
-// daemon session can reach hub-pro through the temporary bootstrap link after
+// daemon session can reach hub-server through the temporary bootstrap link after
 // the join-time interface configuration is replaced.
 type InviterPeer struct {
 	Version    int      `json:"version"`
@@ -724,7 +724,7 @@ func LoadInviterPeers(path string) ([]wireguard.PeerConfig, error) {
 	return []wireguard.PeerConfig{config}, nil
 }
 
-// hubServiceBinder issues hub/net/bind through the real hub-pro service SDK.
+// hubServiceBinder issues hub/net/bind through the real hub-server service SDK.
 type hubServiceBinder struct{}
 
 func (hubServiceBinder) Bind(ctx context.Context, address any, id *identity.Identity, wireGuardKey, name string, admission protocol.DirectBootstrapResponse) (BindResult, error) {
@@ -778,7 +778,7 @@ func (hubServiceBinder) Bind(ctx context.Context, address any, id *identity.Iden
 	}, nil
 }
 
-// bindResponse mirrors the hub-pro hub/net/bind reply (profile + hub signing
+// bindResponse mirrors the hub-server hub/net/bind reply (profile + hub signing
 // identity).
 type bindResponse struct {
 	Success      bool                  `json:"success"`

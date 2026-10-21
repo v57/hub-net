@@ -35,7 +35,7 @@ func main() {
 
 func run(args []string) error {
 	flags := flag.NewFlagSet("hubctl", flag.ContinueOnError)
-	hub := flags.String("hub", "ws://127.0.0.1:1997", "hub-pro address")
+	hub := flags.String("hub", "ws://127.0.0.1:1997", "hub-server address")
 	identityPath := flags.String("identity", "owner.identity", "identity file, created when missing")
 	timeout := flags.Duration("timeout", 30*time.Second, "how long to wait for the hub and its agent")
 	if err := flags.Parse(args); err != nil {

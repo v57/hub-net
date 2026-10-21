@@ -10,7 +10,7 @@
 //     enforcement.MemoryBackend, and an ipc.Server bound to a real Unix socket.
 //   - A shared in-memory Hub signing identity mints the cross-language
 //     ConnectionGrant envelope (protocol.PurposeConnectionGrant) the same way
-//     hub-pro does.
+//     hub-server does.
 //
 // The harness exercises every authorization stage the agent ships: the local
 // IPC attestation flow that proves a service owns a local target, the
@@ -57,7 +57,7 @@ import (
 var ErrDirectFailed = connection.ErrDirectFailed
 
 // HubNetworkID is the fixed overlay network identifier both sides belong to.
-// hub-pro allocates this per Hub; the harness treats it as trusted state.
+// hub-server allocates this per Hub; the harness treats it as trusted state.
 const HubNetworkID = "hnet-e2e"
 
 // ResourceGeneration is the current authorization generation for the single
@@ -141,7 +141,7 @@ func (h *Harness) Provider() *Side { return h.provider }
 func (h *Harness) HubKey() string { return h.hubKey }
 
 // IssueGrant mints a Hub-signed ConnectionGrant authorizing Caller to reach
-// the published share on Provider. It mirrors what hub-pro issues after
+// the published share on Provider. It mirrors what hub-server issues after
 // profile registration, attestation validation, and policy evaluation.
 //
 // Destination port is the published overlay port. The provider overlay

@@ -1,15 +1,15 @@
 package e2e
 
 // testhub.go is an in-process Hub control-plane double used by the agent-level
-// end-to-end tests. It speaks the real hub-pro network/* wire contract over a
+// end-to-end tests. It speaks the real hub-server network/* wire contract over a
 // real channel-go server (HTTP/WebSocket on an ephemeral port), reusing the
-// shared protocol.* signing primitives. This is NOT a hub-pro replacement:
+// shared protocol.* signing primitives. This is NOT a hub-server replacement:
 // cross-language conformance is already locked by the shared fixtures
 // validated under HN-076/HN-077. The double exists so a Go test can exercise
 // hubnet.Agent.ConnectToShare against a real Hub transport without booting the
 // Bun process.
 //
-// The double implements only what the agent needs from hub-pro for HN-310:
+// The double implements only what the agent needs from hub-server for HN-310:
 //
 //   - hub/net/bind: allocate a stable overlay address pair and echo
 //     the trusted Hub signing key + network id so the agent can build a
@@ -23,8 +23,8 @@ package e2e
 //     on connect; the double tolerates them).
 //
 // Authorization policy is intentionally permissive: every authenticated agent
-// may reach every published resource. hub-pro's permission model (hub/group/
-// keys/private/disabled) is exercised by the hub-pro unit tests; the e2e
+// may reach every published resource. hub-server's permission model (hub/group/
+// keys/private/disabled) is exercised by the hub-server unit tests; the e2e
 // harness cares only about the agent's data-plane wiring.
 
 import (
@@ -52,7 +52,7 @@ import (
 // harnesses cannot be confused.
 const HubNetworkIDAgent = "hnet-e2e-agent"
 
-// TestHub is an in-process hub-pro double over a real channel-go server.
+// TestHub is an in-process hub-server double over a real channel-go server.
 type TestHub struct {
 	mu         sync.Mutex
 	hubPublic  ed25519.PublicKey
@@ -70,7 +70,7 @@ type TestHub struct {
 	registers map[string]int          // successful registrations by key
 	replaces  map[string]int          // successful share replacements by service key
 
-	// Device mode (NewDeviceTestHub) mirrors a device-aware hub-pro: it
+	// Device mode (NewDeviceTestHub) mirrors a device-aware hub-server: it
 	// answers hub/info, checks v1 tokens and device certificates, and keys
 	// members by device:<id>. members maps service keys to member keys.
 	devices  bool
@@ -155,7 +155,7 @@ func (h *TestHub) serverOptions() server.Options {
 	return server.Options{
 		State: func(headers map[string]string) any {
 			// The agent authenticates with header "auth" = key.{pubB64}.{sig}.{exp}.
-			// We trust the stated public key as the agent's identity; hub-pro
+			// We trust the stated public key as the agent's identity; hub-server
 			// re-verifies the signature, but for the harness the connection's
 			// stated key is sufficient because the test owns both ends.
 			token := headers["auth"]
@@ -312,7 +312,7 @@ func (h *TestHub) ShareReplaceCount(serviceKey string) int {
 	return h.replaces[serviceKey]
 }
 
-// Revoke bumps the resource generation, mirroring hub-pro revokeResource. The
+// Revoke bumps the resource generation, mirroring hub-server revokeResource. The
 // next grant issuance carries the new generation; agents with older grants
 // fail verification against the current generation.
 func (h *TestHub) Revoke(resourceID string) uint64 {
@@ -387,7 +387,7 @@ func (h *TestHub) registerHandlers() {
 // streamSnapshot emits value() once and ends the stream. channel-go's server
 // sends only from its own loop, so the double can't push later changes on an
 // open stream; tests reconnect agents (Restart) to deliver a new snapshot,
-// which hub-pro would push on the open stream.
+// which hub-server would push on the open stream.
 func (h *TestHub) streamSnapshot(emit channelgo.StreamEmitter, value func() any) error {
 	h.mu.Lock()
 	current := value()
@@ -680,7 +680,7 @@ func decodeAttestation(raw any) (protocol.AgentAttestation, error) {
 }
 
 // verifyAgentAttestation re-checks the attestation signature against the
-// registering agent's public key, mirroring hub-pro verifyAttestation. The
+// registering agent's public key, mirroring hub-server verifyAttestation. The
 // agent key arrives base64 SPKI; we decode and verify under the
 // agent-attestation domain.
 func verifyAgentAttestation(att protocol.AgentAttestation, prof *hubProfile) error {
@@ -710,8 +710,8 @@ func verifyAgentAttestation(att protocol.AgentAttestation, prof *hubProfile) err
 }
 
 func resourceIDFor(key, shareName string) string {
-	// Mirror hub-pro's stable resourceId derivation (owner key + share name).
-	// The exact hash is hub-pro's concern; the harness needs only stability.
+	// Mirror hub-server's stable resourceId derivation (owner key + share name).
+	// The exact hash is hub-server's concern; the harness needs only stability.
 	return "hnr-" + shortHash(key) + "-" + shareName
 }
 

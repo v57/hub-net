@@ -3,7 +3,7 @@
 //
 // Hub requires the agent to register its profile after authentication so it
 // can bind the WireGuard key, allocate overlay addresses, and list the agent
-// for callers. Registration is idempotent per connection: hub-pro resets
+// for callers. Registration is idempotent per connection: hub-server resets
 // agent state on disconnect (HN-101) and re-issues overlay addresses on the
 // next register call, so the agent re-registers on every reconnect.
 package profile
@@ -53,7 +53,7 @@ type RegistrarOptions struct {
 	Timeout   time.Duration
 	Name      string
 	Platform  string
-	// BindingKind defaults to machine (the hub-pro host's own agent).
+	// BindingKind defaults to machine (the hub-server host's own agent).
 	BindingKind protocol.LocalAgentBindingKind
 }
 

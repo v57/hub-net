@@ -2,7 +2,7 @@
 # Linux owner -> Linux joiner acceptance on the colima `hubnet` profile.
 #
 #   hn-node    hub-net-node on the VM's own network (<vm address>:1964 tcp+udp)
-#   hn-owner   hub-pro + `hub-net local`: the hub host, issues the invitation
+#   hn-owner   hub-server + `hub-net local`: the hub host, issues the invitation
 #   hn-joiner  `hub-net join <invite>`
 #   hn-other   a second joiner, used to check that an invitation is single-use
 #
@@ -22,7 +22,7 @@
 set -euo pipefail
 
 here=$(cd "$(dirname "$0")" && pwd)
-# ~/Developer/Hub: hub-net, hub-net-node and hub-pro are built from its clones.
+# ~/Developer/Hub: hub-net, hub-net-node and hub-server are built from its clones.
 hub=$(cd "$here/../../../.." && pwd)
 context=${HUBNET_CONTEXT:-colima-hubnet}
 # The VM's address on the Mac's vmnet (--network-address); it can change when
@@ -59,7 +59,7 @@ D build -q -t hubnet-dev "$here" >/dev/null
 
 down
 rm -rf "$state"
-mkdir -p "$state/node" "$state/owner/hubpro" "$state/joiner" "$state/other"
+mkdir -p "$state/node" "$state/owner/hub-server" "$state/joiner" "$state/other"
 D network inspect hubnet-lan >/dev/null 2>&1 || D network create --subnet 172.30.0.0/24 hubnet-lan >/dev/null
 
 say "starting hub-net-node on $node_ip:1964"
@@ -94,10 +94,10 @@ wait_for() {
 }
 
 owner_key=$(D exec hn-owner hubctl -identity /state/owner.identity key)
-say "starting hub-pro on hn-owner (owner ${owner_key:0:24}...)"
-D exec -d -w /state/hubpro -e HUBOWNER="$owner_key" -e HUBLISTEN=0.0.0.0:1997 hn-owner \
-  sh -c 'bun /hub/Core/hub-pro/index.ts > /state/hub-pro.log 2>&1'
-wait_for "hub-pro :1997" D exec hn-owner nc -z 127.0.0.1 1997
+say "starting hub-server on hn-owner (owner ${owner_key:0:24}...)"
+D exec -d -w /state/hub-server -e HUBOWNER="$owner_key" -e HUBLISTEN=0.0.0.0:1997 hn-owner \
+  sh -c 'bun /hub/Core/hub-server/index.ts > /state/hub-server.log 2>&1'
+wait_for "hub-server :1997" D exec hn-owner nc -z 127.0.0.1 1997
 D exec hn-owner hubctl -identity /state/owner.identity node-set "ws://$node_ip:1964"
 
 start_daemon() {
@@ -144,7 +144,7 @@ agent() { D exec hn-owner hubctl -identity /state/owner.identity agent "$@"; }
 failed=0
 check_eventually "joiner -> owner ping" hn-joiner ping -c2 -W2 "$owner_ip"
 check_eventually "owner -> joiner ping" hn-owner ping -c2 -W2 "$joiner_ip"
-check_eventually "joiner -> hub-pro :1997" hn-joiner nc -z -w3 "$owner_ip" 1997
+check_eventually "joiner -> hub-server :1997" hn-joiner nc -z -w3 "$owner_ip" 1997
 
 say "--- single-use invitation"
 refute "second joiner with the same invitation is rejected" hn-other hub-net -state-dir /var/lib/hub-net join "$invite"
@@ -168,7 +168,7 @@ second_invite=$(D exec hn-owner hubctl -identity /state/owner.identity invite)
 D exec hn-other hub-net -state-dir /var/lib/hub-net join "$second_invite" >/dev/null
 other_ip=$(D exec hn-other sh -c "ip -4 -br addr show dev hubnet0" | tr ' ' '\n' | grep '^100\.9[6-9]' | cut -d/ -f1 | head -1)
 say "second member $other_ip"
-check_eventually "second member reaches hub-pro" hn-other nc -z -w3 "$owner_ip" 1997
+check_eventually "second member reaches hub-server" hn-other nc -z -w3 "$owner_ip" 1997
 refute "port 8080 stays closed for the second member" hn-other nc -z -w3 "$owner_ip" 8080
 refute "members cannot reach each other directly" hn-other ping -c1 -W2 "$joiner_ip"
 
@@ -179,16 +179,16 @@ restart_daemon() {
   start_daemon "$1"
 }
 restart_daemon hn-joiner
-check_eventually "joiner daemon restart: hub-pro reachable again" hn-joiner nc -z -w3 "$owner_ip" 1997
+check_eventually "joiner daemon restart: hub-server reachable again" hn-joiner nc -z -w3 "$owner_ip" 1997
 restart_daemon hn-owner
-check_eventually "owner daemon restart: joiner reaches hub-pro" hn-joiner nc -z -w3 "$owner_ip" 1997
+check_eventually "owner daemon restart: joiner reaches hub-server" hn-joiner nc -z -w3 "$owner_ip" 1997
 check_eventually "owner daemon restart: owner reaches joiner" hn-owner ping -c1 -W2 "$joiner_ip"
 D exec hn-owner pkill -x bun || true
-D exec -d -w /state/hubpro -e HUBOWNER="$owner_key" -e HUBLISTEN=0.0.0.0:1997 hn-owner \
-  sh -c 'bun /hub/Core/hub-pro/index.ts >> /state/hub-pro.log 2>&1'
-check_eventually "hub-pro restart: joiner reconnects" hn-joiner sh -c "hub-net -state-dir /var/lib/hub-net list | grep -q connected && nc -z -w3 $owner_ip 1997"
-check_eventually "hub-pro restart: owner reaches joiner" hn-owner ping -c1 -W2 "$joiner_ip"
-check_eventually "after restarts: second member reaches hub-pro" hn-other nc -z -w3 "$owner_ip" 1997
+D exec -d -w /state/hub-server -e HUBOWNER="$owner_key" -e HUBLISTEN=0.0.0.0:1997 hn-owner \
+  sh -c 'bun /hub/Core/hub-server/index.ts >> /state/hub-server.log 2>&1'
+check_eventually "hub-server restart: joiner reconnects" hn-joiner sh -c "hub-net -state-dir /var/lib/hub-net list | grep -q connected && nc -z -w3 $owner_ip 1997"
+check_eventually "hub-server restart: owner reaches joiner" hn-owner ping -c1 -W2 "$joiner_ip"
+check_eventually "after restarts: second member reaches hub-server" hn-other nc -z -w3 "$owner_ip" 1997
 
 say "--- revoke and leave"
 if [[ -n $joiner_key ]]; then

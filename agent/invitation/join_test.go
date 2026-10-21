@@ -25,7 +25,7 @@ import (
 )
 
 // hubProHostFixed is the inviter's overlay IPv4 inside the frozen overlay
-// prefix; it doubles as the address where hub-pro is reachable through the
+// prefix; it doubles as the address where hub-server is reachable through the
 // temporary link.
 const hubProHostFixed = "100.96.0.1"
 
@@ -265,7 +265,7 @@ func TestJoinEndToEnd(t *testing.T) {
 	}
 
 	// The temporary link must be up with the joiner's bootstrap address and
-	// the inviter peer covering the inviter addresses + hub-pro.
+	// the inviter peer covering the inviter addresses + hub-server.
 	config, up := adapter.State()
 	if !up {
 		t.Fatal("joiner adapter not up after Join")
@@ -297,7 +297,7 @@ func TestJoinEndToEnd(t *testing.T) {
 		}
 	}
 
-	// The binder must have received the hub-pro address through the inviter
+	// The binder must have received the hub-server address through the inviter
 	// and the joiner's WireGuard key.
 	binder.mu.Lock()
 	defer binder.mu.Unlock()
@@ -314,7 +314,7 @@ func TestJoinEndToEnd(t *testing.T) {
 	if binder.calls[0].wireGuardKey != base64Std(wgPublic) {
 		t.Errorf("bind wireguard key mismatch")
 	}
-	// hub-pro admits the joiner on the inviter's signed response, so the
+	// hub-server admits the joiner on the inviter's signed response, so the
 	// binder must forward it unchanged.
 	admission := binder.calls[0].admission
 	if admission.JoinerWireGuardKey != base64Std(wgPublic) || admission.Signature == "" {

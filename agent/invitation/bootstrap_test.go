@@ -587,7 +587,7 @@ func TestUpdateJoinerAllowedIPs(t *testing.T) {
 }
 
 // The inviter's UDP listener is reachable by anyone; without the node's
-// signal for the join it must not hand out a signed response (hub-pro admits
+// signal for the join it must not hand out a signed response (hub-server admits
 // joiners on that response).
 func TestInviterRejectsUnsignalledJoin(t *testing.T) {
 	now := time.Now()

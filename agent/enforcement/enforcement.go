@@ -17,7 +17,7 @@ import (
 const controlResource = "control:hub-pro"
 
 // AllowControl lets any overlay peer reach TCP port on this host's overlay
-// addresses. The hub host's local agent uses it for hub-pro, which members and
+// addresses. The hub host's local agent uses it for hub-server, which members and
 // joiners reach only through the overlay. It replaces earlier control rules.
 func (m *Manager) AllowControl(destinationAddresses []string, port uint16) error {
 	if port == 0 {
