@@ -9,6 +9,8 @@
 //	hubctl -hub ws://127.0.0.1:1997 -identity owner.identity approve
 //	hubctl -identity owner.identity agent post net/revoke '"<member key>"'
 //	hubctl -identity owner.identity agent stream net/users
+//	hubctl -identity owner.identity post hub/device/revoke '{"id":"<device id>"}'
+//	hubctl -identity owner.identity stream hub/devices
 package main
 
 import (
@@ -40,7 +42,7 @@ func run(args []string) error {
 		return err
 	}
 	if flags.NArg() == 0 {
-		return errors.New("usage: hubctl [flags] key | node-set <endpoint> | invite | list | approve | agent post|stream <path> [json]")
+		return errors.New("usage: hubctl [flags] key | node-set <endpoint> | invite | list | approve | post|stream <path> [json] | agent post|stream <path> [json]")
 	}
 	id, err := loadOrCreate(*identityPath)
 	if err != nil {
@@ -83,6 +85,29 @@ func run(args []string) error {
 		return nil
 	case "approve":
 		return approvePending(ctx, svc)
+	case "post", "stream":
+		// Calls the hub itself, e.g. hub/devices or hub/device/revoke.
+		if flags.NArg() < 2 {
+			return errors.New("usage: hubctl post|stream <path> [json]")
+		}
+		var body any
+		if flags.NArg() > 2 {
+			if err := json.Unmarshal([]byte(flags.Arg(2)), &body); err != nil {
+				return fmt.Errorf("body: %w", err)
+			}
+		}
+		var value any
+		if flags.Arg(0) == "post" {
+			value, err = svc.Send(flags.Arg(1), body)
+		} else {
+			value, err = hubconn.OneValueTyped[any](ctx, svc, flags.Arg(1), body)
+		}
+		if err != nil {
+			return err
+		}
+		encoded, _ := json.Marshal(value)
+		fmt.Println(string(encoded))
+		return nil
 	case "agent":
 		// Calls the hub's local agent the way Hub App does: routed by
 		// context.service to the provider on the hub's machine.

@@ -196,6 +196,17 @@ if [[ -n $joiner_key ]]; then
   check_eventually "revoked member loses access" hn-joiner sh -c "! nc -z -w3 $owner_ip 1997"
   check_eventually "other member keeps access" hn-other nc -z -w3 "$owner_ip" 1997
 fi
+hubctl_owner() { D exec hn-owner hubctl -identity /state/owner.identity "$@"; }
+devices=$(hubctl_owner stream hub/devices || true)
+other_device=$(printf '%s' "$devices" | python3 -c 'import json,sys; print(next(d["id"] for d in json.load(sys.stdin) if d.get("name") == "other"))' 2>/dev/null || true)
+if [[ -n $other_device ]]; then
+  say "PASS the second member is device ${other_device:0:12}..."
+  hubctl_owner post hub/device/revoke "{\"id\":\"$other_device\"}" >/dev/null || true
+  check_eventually "device revoke: the hub host drops its peer" hn-other sh -c "! nc -z -w3 $owner_ip 1997"
+  check "device revoke: the owner no longer reaches it" hn-owner sh -c "! ping -c1 -W2 $other_ip"
+else
+  say "FAIL hub/devices did not list the second member: $devices"; failed=1
+fi
 D exec hn-other hub-net -state-dir /var/lib/hub-net leave owner >/dev/null || true
 refute "leaving removes the interface" hn-other ip link show hubnet0
 check "leaving clears the membership" hn-other sh -c "test -z \"\$(hub-net -state-dir /var/lib/hub-net list)\""

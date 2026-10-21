@@ -40,7 +40,9 @@ Checks: traffic both ways and hub-pro (`:1997`) over the overlay; single-use
 invitation; ports stay closed (agent-local port grants are retired:
 `net/ports/update` is refused and opens nothing); `net/users` lists the
 joiner; members cannot reach each other; restart of the joiner daemon, the
-owner daemon and hub-pro; revoke; leave.
+owner daemon and hub-pro; revoke (`net/revoke`, then `hub/device/revoke` of the
+second member's device); leave. Agents join as devices: hub-pro keys each
+member `device:<id>`.
 
 `hubctl` (`agent/integration/hubctl`) plays the owner's app: it sets the
 node endpoint, approves the agent's APIs (`hub/host/pending`), requests
