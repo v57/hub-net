@@ -5,8 +5,8 @@
 // signs its compact invitations) and proves possession of the matching
 // Ed25519 private key through the node's signed challenge handshake:
 //
-//	inviter.register (service key only) -> inviter.challenge
-//	-> inviter.register (nonce + signature) -> inviter.registered
+//	presence.register (service key only) -> presence.challenge
+//	-> presence.register (nonce + signature) -> presence.registered
 //
 // While the registration lease is live and the WebSocket stays open the agent
 // is considered online, so a joiner's session.open carrying one of its
@@ -322,7 +322,7 @@ func (c *Client) connectAndRegister(ctx context.Context, endpoint string) error 
 			return err
 		}
 		switch reply.Type {
-		case protocol.MessageInviterUnregistered:
+		case protocol.MessagePresenceUnregistered:
 			c.log.Warn("node dropped registration; re-registering")
 			expiresAt, err = c.register(ctx, conn)
 			if err != nil {
@@ -568,7 +568,7 @@ func (c *Client) register(ctx context.Context, conn net.Conn) (time.Time, error)
 	if err := WriteEnvelope(conn, protocol.Envelope{
 		MajorVersion: protocol.MajorVersion,
 		MinorVersion: protocol.MinorVersion,
-		Type:         protocol.MessageRegisterInviter,
+		Type:         protocol.MessagePresenceRegister,
 		RequestID:    challengeRequestID,
 		ServiceKey:   c.key,
 	}); err != nil {
@@ -592,7 +592,7 @@ func (c *Client) register(ctx context.Context, conn net.Conn) (time.Time, error)
 		if reply.RequestID != challengeRequestID {
 			continue
 		}
-		if reply.Type != protocol.MessageInviterChallenge || reply.ChallengeNonce == "" {
+		if reply.Type != protocol.MessagePresenceChallenge || reply.ChallengeNonce == "" {
 			return time.Time{}, fmt.Errorf("nodeclient: unexpected reply %q", reply.Type)
 		}
 		nonce = reply.ChallengeNonce
@@ -603,7 +603,7 @@ func (c *Client) register(ctx context.Context, conn net.Conn) (time.Time, error)
 	if err != nil {
 		return time.Time{}, err
 	}
-	signature, err := hubprotocol.SignBytes(hubprotocol.PurposeInviterRegistration, nonceBytes, c.priv)
+	signature, err := hubprotocol.SignBytes(hubprotocol.PurposePresence, nonceBytes, c.priv)
 	if err != nil {
 		return time.Time{}, fmt.Errorf("nodeclient: sign challenge: %w", err)
 	}
@@ -612,7 +612,7 @@ func (c *Client) register(ctx context.Context, conn net.Conn) (time.Time, error)
 	if err := WriteEnvelope(conn, protocol.Envelope{
 		MajorVersion:       protocol.MajorVersion,
 		MinorVersion:       protocol.MinorVersion,
-		Type:               protocol.MessageRegisterInviter,
+		Type:               protocol.MessagePresenceRegister,
 		RequestID:          answerRequestID,
 		ServiceKey:         c.key,
 		ChallengeNonce:     nonce,
@@ -637,7 +637,7 @@ func (c *Client) register(ctx context.Context, conn net.Conn) (time.Time, error)
 		if reply.RequestID != answerRequestID {
 			continue
 		}
-		if reply.Type != protocol.MessageInviterRegistered || reply.RegistrationExpiresAt == "" {
+		if reply.Type != protocol.MessagePresenceRegistered || reply.RegistrationExpiresAt == "" {
 			return time.Time{}, fmt.Errorf("nodeclient: unexpected reply %q", reply.Type)
 		}
 		expiresAt, err := time.Parse(time.RFC3339Nano, reply.RegistrationExpiresAt)
