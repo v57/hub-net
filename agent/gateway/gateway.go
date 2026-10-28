@@ -16,6 +16,10 @@ type Config struct {
 	ProtectedIPv4   []netip.Prefix
 	ProtectedIPv6   []netip.Prefix
 	ManagementPorts []uint16
+	// LocalAddresses are this interface's own overlay addresses. Devices of
+	// the Hub keep reaching them while the gateway serves, as they do
+	// without it; the host's other addresses stay out of reach.
+	LocalAddresses []netip.Addr
 }
 
 type Backend interface {

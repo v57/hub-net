@@ -1283,12 +1283,17 @@ func (a *Agent) restoreGateway(ctx context.Context, sender *channelgo.Sender) er
 		return nil
 	}
 	backend := a.gatewayBackend
-	interfaceName := a.interfaceName
+	config := gateway.DefaultConfig(a.interfaceName)
+	for _, address := range []netip.Addr{a.interfaceAddress, a.interfaceIPv6} {
+		if address.IsValid() {
+			config.LocalAddresses = append(config.LocalAddresses, address)
+		}
+	}
 	a.mu.Unlock()
 	if backend == nil {
 		return gateway.ErrPlatformUnsupported
 	}
-	if err := backend.Enable(gateway.DefaultConfig(interfaceName)); err != nil {
+	if err := backend.Enable(config); err != nil {
 		return err
 	}
 	hostname, err := os.Hostname()

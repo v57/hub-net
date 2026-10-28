@@ -174,14 +174,24 @@ func rules(config Config, table string) string {
 	output.WriteString(" chain input { type filter hook input priority -10; policy accept;\n")
 	fmt.Fprintf(&output, "  iifname %q ct state invalid drop\n", config.InterfaceName)
 	fmt.Fprintf(&output, "  iifname %q icmpv6 type { nd-neighbor-solicit, nd-neighbor-advert } accept\n", config.InterfaceName)
+	// Answers to this host's own connections over the Hub Network, such as
+	// its connection to the hub, keep arriving
+	fmt.Fprintf(&output, "  iifname %q ct state established,related accept\n", config.InterfaceName)
+	for _, port := range config.ManagementPorts {
+		fmt.Fprintf(&output, "  iifname %q meta l4proto { tcp, udp } th dport %s drop\n", config.InterfaceName, strconv.Itoa(int(port)))
+	}
+	for _, address := range config.LocalAddresses {
+		family := "ip"
+		if address.Is6() {
+			family = "ip6"
+		}
+		fmt.Fprintf(&output, "  iifname %q %s daddr %s accept\n", config.InterfaceName, family, address.Unmap())
+	}
 	for _, prefix := range config.ProtectedIPv4 {
 		fmt.Fprintf(&output, "  iifname %q ip daddr %s drop\n", config.InterfaceName, prefix)
 	}
 	for _, prefix := range config.ProtectedIPv6 {
 		fmt.Fprintf(&output, "  iifname %q ip6 daddr %s drop\n", config.InterfaceName, prefix)
-	}
-	for _, port := range config.ManagementPorts {
-		fmt.Fprintf(&output, "  iifname %q meta l4proto { tcp, udp } th dport %s drop\n", config.InterfaceName, strconv.Itoa(int(port)))
 	}
 	fmt.Fprintf(&output, "  iifname %q drop\n", config.InterfaceName)
 	output.WriteString(" }\n")

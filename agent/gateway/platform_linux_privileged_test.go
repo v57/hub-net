@@ -115,6 +115,7 @@ while True:
 	config.ManagementPorts = []uint16{8443}
 	config.ProtectedIPv4 = append(config.ProtectedIPv4, netip.MustParsePrefix("203.0.113.0/24"))
 	config.ProtectedIPv6 = append(config.ProtectedIPv6, netip.MustParsePrefix("2001:db8:2::/64"))
+	config.LocalAddresses = []netip.Addr{netip.MustParseAddr("100.96.0.1"), netip.MustParseAddr("fd48:5542:4e45::1")}
 	backend := &linuxBackend{runner: commandRunner{}}
 	if err := backend.Enable(config); err != nil {
 		t.Fatalf("enable gateway: %v", err)
@@ -122,6 +123,13 @@ while True:
 	t.Cleanup(func() { _ = backend.Disable() })
 
 	ping(t, clientNS, "198.51.100.2", false, true)
+	// The host stays on its Hub Network: devices reach this interface's own
+	// addresses, and answers to the host's own connections come back
+	ping(t, clientNS, "100.96.0.1", false, true)
+	ping(t, clientNS, "fd48:5542:4e45::1", true, true)
+	if err := gatewayExec("", "ping", "-c", "1", "-W", "1", "100.96.0.2"); err != nil {
+		t.Fatalf("host lost its own connection over the gateway interface: %v", err)
+	}
 	dnsProbe(t, clientNS, "198.51.100.2", "198.51.100.1", false, true)
 	dnsProbe(t, clientNS, "2001:db8:1::2", "2001:db8:1::1", true, true)
 
