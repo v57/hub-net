@@ -120,6 +120,9 @@ type Agent struct {
 	gatewayBackend   gateway.Backend
 	gatewayAllowed   bool
 	gatewayActive    bool
+	// gatewayMu serializes enabling and disabling the gateway, which wait on
+	// hub-server outside mu.
+	gatewayMu sync.Mutex
 
 	// Trusted per-resource authorization generations. The production agent
 	// populates this from a network/resource/generations subscription; the
@@ -486,9 +489,13 @@ func (a *Agent) Run(ctx context.Context) (err error) {
 				}
 			}
 			a.resolver.Activate()
-			if err := a.restoreGateway(runCtx, sender); err != nil {
-				a.logger.Error("gateway restore failed", slog.String("err", err.Error()))
-			}
+			// Off the channel loop: the advertisement waits for hub-server's
+			// answer, which this loop delivers.
+			go func() {
+				if err := a.restoreGateway(runCtx, sender); err != nil {
+					a.logger.Error("gateway restore failed", slog.String("err", err.Error()))
+				}
+			}()
 			if a.onConnect != nil {
 				a.onConnect(runCtx, sender)
 			}
@@ -1236,6 +1243,8 @@ func (a *Agent) DisableGateway(ctx context.Context) error {
 }
 
 func (a *Agent) restoreGateway(ctx context.Context, sender *channelgo.Sender) error {
+	a.gatewayMu.Lock()
+	defer a.gatewayMu.Unlock()
 	a.mu.Lock()
 	if !a.gatewayAllowed || a.gatewayActive {
 		a.mu.Unlock()
@@ -1260,21 +1269,60 @@ func (a *Agent) restoreGateway(ctx context.Context, sender *channelgo.Sender) er
 		IPv4: true, IPv6: true, DNS: true,
 		UpdatedAt: time.Now().UTC().Format(time.RFC3339),
 	}
-	if _, err := sender.Send("network/gateway/advertise", map[string]any{
+	if _, err := sendWithin(ctx, sender, gatewayRequestTimeout, "network/gateway/advertise", map[string]any{
 		"capability": capability,
 		"endpoint":   fmt.Sprintf("%s:%d", hostname, wireguard.DefaultPort),
 	}); err != nil {
 		_ = backend.Disable()
-		return err
+		if errors.Is(err, errHubDidNotAnswer) {
+			return fmt.Errorf("gateway: %w (the hub's owner may need to allow this device Hub Network: Provide Gateway)", err)
+		}
+		return fmt.Errorf("gateway: %w", err)
 	}
 	a.mu.Lock()
 	a.gatewayActive = true
 	a.mu.Unlock()
-	_ = ctx
 	return nil
 }
 
+// gatewayRequestTimeout bounds the gateway calls to hub-server. A hub that
+// never answers (an older hub, or one holding the call for the owner's
+// approval) must not hold the daemon's command lock.
+const gatewayRequestTimeout = 15 * time.Second
+
+var errHubDidNotAnswer = errors.New("the hub did not answer")
+
+// sendWithin sends one request and waits for its answer for at most timeout,
+// cancelling it after. Never call it on the channel's own loop (OnConnect):
+// the answer is read there, so it would always time out.
+func sendWithin(ctx context.Context, sender *channelgo.Sender, timeout time.Duration, path string, body any) (any, error) {
+	request := sender.Request(path, body)
+	type answer struct {
+		value any
+		err   error
+	}
+	answered := make(chan answer, 1)
+	go func() {
+		value, err := request.Wait()
+		answered <- answer{value, err}
+	}()
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	select {
+	case result := <-answered:
+		return result.value, result.err
+	case <-timer.C:
+		request.Cancel()
+		return nil, fmt.Errorf("%s: %w within %s", path, errHubDidNotAnswer, timeout)
+	case <-ctx.Done():
+		request.Cancel()
+		return nil, ctx.Err()
+	}
+}
+
 func (a *Agent) disableGateway(ctx context.Context, advertise bool) error {
+	a.gatewayMu.Lock()
+	defer a.gatewayMu.Unlock()
 	a.mu.Lock()
 	active := a.gatewayActive
 	backend := a.gatewayBackend
@@ -1286,13 +1334,12 @@ func (a *Agent) disableGateway(ctx context.Context, advertise bool) error {
 	}
 	var result error
 	if advertise && service != nil && service.Sender() != nil {
-		_, err := service.Sender().Send("network/gateway/remove", map[string]string{"reason": "provider_disabled"})
+		_, err := sendWithin(ctx, service.Sender(), gatewayRequestTimeout, "network/gateway/remove", map[string]string{"reason": "provider_disabled"})
 		result = errors.Join(result, err)
 	}
 	if backend != nil {
 		result = errors.Join(result, backend.Disable())
 	}
-	_ = ctx
 	return result
 }
 
