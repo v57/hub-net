@@ -429,6 +429,9 @@ func encodePeer(w *nlmsgWriter, peer PeerConfig, remove bool) {
 			w.PutBytes(unix.WGPEER_A_ENDPOINT, sockaddr)
 		}
 	}
+	if peer.PersistentKeepalive != 0 {
+		w.PutUint16(unix.WGPEER_A_PERSISTENT_KEEPALIVE_INTERVAL, peer.PersistentKeepalive)
+	}
 	if len(peer.AllowedIPs) > 0 {
 		allowedOff := w.PutNested(unix.WGPEER_A_ALLOWEDIPS)
 		for _, prefix := range peer.AllowedIPs {

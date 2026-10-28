@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"net/netip"
 	"sync"
+	"time"
 )
 
 // IPv4OverlayPrefix is the agent-managed IPv4 overlay. Frozen in
@@ -38,6 +39,16 @@ type PeerConfig struct {
 	AllowedIPs []netip.Prefix
 	// Endpoint is an optional peer UDP endpoint for active sessions.
 	Endpoint string
+	// PersistentKeepalive, in seconds, keeps a NAT mapping toward the peer
+	// open. Zero leaves it off.
+	PersistentKeepalive uint16
+}
+
+// HandshakeReporter is implemented by adapters that can read the time of
+// each peer's latest handshake from the tunnel, keyed by the base64 public
+// key. A peer without a handshake yet is absent.
+type HandshakeReporter interface {
+	LastHandshakes() (map[string]time.Time, error)
 }
 
 // InterfaceConfig is the full per-profile WireGuard interface configuration.
@@ -110,12 +121,34 @@ func ValidateAllowedIPs(allowed []netip.Prefix) error {
 // running the agent on unsupported platforms where real tunnel setup fails.
 // It records the sequence of operations so tests can assert behavior.
 type FakeAdapter struct {
-	mu      sync.Mutex
-	up      bool
-	config  InterfaceConfig
-	peers   map[string]PeerConfig
-	upErr   error
-	peerErr error
+	mu         sync.Mutex
+	up         bool
+	config     InterfaceConfig
+	peers      map[string]PeerConfig
+	upErr      error
+	peerErr    error
+	handshakes map[string]time.Time
+}
+
+// SetLastHandshake records a handshake with the peer of the base64 key.
+func (f *FakeAdapter) SetLastHandshake(key string, at time.Time) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.handshakes == nil {
+		f.handshakes = make(map[string]time.Time)
+	}
+	f.handshakes[key] = at
+}
+
+// LastHandshakes reports the handshakes SetLastHandshake recorded.
+func (f *FakeAdapter) LastHandshakes() (map[string]time.Time, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make(map[string]time.Time, len(f.handshakes))
+	for key, at := range f.handshakes {
+		out[key] = at
+	}
+	return out, nil
 }
 
 // NewFakeAdapter returns an empty FakeAdapter.

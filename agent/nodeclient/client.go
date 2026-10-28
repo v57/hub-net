@@ -111,6 +111,13 @@ type Options struct {
 	// offer once its bootstrap session opens. May be nil or return nil; the
 	// node still delivers the inviter's node-observed endpoint to the joiner.
 	Candidates func() []hubprotocol.Candidate
+	// Links receives the node's link pushes (link.incoming, link.ready,
+	// link.closed) and its errors about a link. It runs on the read loop:
+	// it must not wait for the node.
+	Links func(protocol.Envelope)
+	// Presence is told when the presence registration comes up (a fresh
+	// registration: the node knows no links of this device) or ends.
+	Presence func(present bool)
 	// Probe sends the invitation UDP probe and awaits the node's confirmation.
 	// When set, the client builds the probe from the pending envelope and
 	// delegates the datagram to this hook instead of dialing its own ephemeral
@@ -139,6 +146,14 @@ type Client struct {
 	online     bool
 	endpoint   string
 	started    bool
+	// conn is the presence connection while it is open; writeMu serializes
+	// its writes.
+	conn    net.Conn
+	writeMu sync.Mutex
+	// waiters are link.open calls waiting for their answer, by request id;
+	// opening keeps their order.
+	waiters map[string]chan protocol.Envelope
+	opening []string
 }
 
 // New validates options and constructs a Client.
@@ -282,6 +297,14 @@ func (c *Client) connectAndRegister(ctx context.Context, endpoint string) error 
 		return err
 	}
 	defer conn.Close()
+	c.mu.Lock()
+	c.conn = conn
+	c.mu.Unlock()
+	defer func() {
+		c.mu.Lock()
+		c.conn = nil
+		c.mu.Unlock()
+	}()
 	// Unblock the read loop on cancellation so Run returns promptly.
 	stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
 	defer stop()
@@ -320,6 +343,9 @@ func (c *Client) connectAndRegister(ctx context.Context, endpoint string) error 
 				continue
 			}
 			return err
+		}
+		if c.dispatch(reply) {
+			continue
 		}
 		switch reply.Type {
 		case protocol.MessagePresenceUnregistered:
@@ -369,7 +395,7 @@ func (c *Client) runBootstrap(ctx context.Context, conn net.Conn, endpoint strin
 		return err
 	}
 	openRequestID := newRequestID()
-	if err := WriteEnvelope(conn, protocol.Envelope{
+	if err := c.write(conn, protocol.Envelope{
 		MajorVersion:   protocol.MajorVersion,
 		MinorVersion:   protocol.MinorVersion,
 		Type:           protocol.MessageOpenSession,
@@ -390,6 +416,9 @@ func (c *Client) runBootstrap(ctx context.Context, conn net.Conn, endpoint strin
 		reply, err := ReadEnvelope(conn)
 		if err != nil {
 			return fmt.Errorf("nodeclient: read bootstrap open: %w", err)
+		}
+		if c.dispatch(reply) {
+			continue
 		}
 		if reply.Type == protocol.MessageError {
 			if reply.Error == nil {
@@ -424,7 +453,7 @@ func (c *Client) runBootstrap(ctx context.Context, conn net.Conn, endpoint strin
 			if candidate.ExpiresAt == "" {
 				candidate.ExpiresAt = c.now().Add(protocol.DefaultCandidateLifetime).UTC().Format(time.RFC3339Nano)
 			}
-			if err := WriteEnvelope(conn, protocol.Envelope{
+			if err := c.write(conn, protocol.Envelope{
 				MajorVersion: protocol.MajorVersion,
 				MinorVersion: protocol.MinorVersion,
 				Type:         protocol.MessageOfferCandidate,
@@ -452,6 +481,9 @@ waitLoop:
 				break
 			}
 			return fmt.Errorf("nodeclient: read joiner candidates: %w", err)
+		}
+		if c.dispatch(reply) {
+			continue
 		}
 		switch reply.Type {
 		case protocol.MessageCandidates:
@@ -497,7 +529,7 @@ waitLoop:
 // already open", breaking joins after the first exchange. The close is
 // best-effort: the session also expires server-side.
 func (c *Client) closeBootstrapSession(conn net.Conn, sessionID string) {
-	_ = WriteEnvelope(conn, protocol.Envelope{
+	_ = c.write(conn, protocol.Envelope{
 		MajorVersion: protocol.MajorVersion,
 		MinorVersion: protocol.MinorVersion,
 		Type:         protocol.MessageCloseSession,
@@ -565,7 +597,7 @@ func (c *Client) sendProbe(ctx context.Context, endpoint string, pending protoco
 // expiry reported by the node.
 func (c *Client) register(ctx context.Context, conn net.Conn) (time.Time, error) {
 	challengeRequestID := newRequestID()
-	if err := WriteEnvelope(conn, protocol.Envelope{
+	if err := c.write(conn, protocol.Envelope{
 		MajorVersion: protocol.MajorVersion,
 		MinorVersion: protocol.MinorVersion,
 		Type:         protocol.MessagePresenceRegister,
@@ -581,6 +613,9 @@ func (c *Client) register(ctx context.Context, conn net.Conn) (time.Time, error)
 		reply, err := ReadEnvelope(conn)
 		if err != nil {
 			return time.Time{}, fmt.Errorf("nodeclient: read challenge: %w", err)
+		}
+		if c.dispatch(reply) {
+			continue
 		}
 		if reply.Type == protocol.MessageError {
 			if reply.Error == nil {
@@ -609,7 +644,7 @@ func (c *Client) register(ctx context.Context, conn net.Conn) (time.Time, error)
 	}
 
 	answerRequestID := newRequestID()
-	if err := WriteEnvelope(conn, protocol.Envelope{
+	if err := c.write(conn, protocol.Envelope{
 		MajorVersion:       protocol.MajorVersion,
 		MinorVersion:       protocol.MinorVersion,
 		Type:               protocol.MessagePresenceRegister,
@@ -626,6 +661,9 @@ func (c *Client) register(ctx context.Context, conn net.Conn) (time.Time, error)
 		reply, err := ReadEnvelope(conn)
 		if err != nil {
 			return time.Time{}, fmt.Errorf("nodeclient: read registration: %w", err)
+		}
+		if c.dispatch(reply) {
+			continue
 		}
 		if reply.Type == protocol.MessageError {
 			if reply.Error == nil {
@@ -650,8 +688,12 @@ func (c *Client) register(ctx context.Context, conn net.Conn) (time.Time, error)
 
 func (c *Client) setOnline(online bool) {
 	c.mu.Lock()
+	changed := c.online != online
 	c.online = online
 	c.mu.Unlock()
+	if changed && c.opts.Presence != nil {
+		c.opts.Presence(online)
+	}
 }
 
 func (c *Client) setEndpoint(endpoint string) {

@@ -49,6 +49,7 @@ import (
 	"github.com/v57/hub-net/logging"
 	"github.com/v57/hub-net/netapi"
 	"github.com/v57/hub-net/nodeclient"
+	"github.com/v57/hub-net/peerlink"
 	"github.com/v57/hub-net/platform"
 	"github.com/v57/hub-net/profile"
 	"github.com/v57/hub-net/publications"
@@ -135,7 +136,9 @@ type Agent struct {
 	netUsers    *netapi.Registry
 	// nodeClient keeps the online-inviter registration live against
 	// hub-net-node; NodeOnline reports its lease state.
-	nodeClient   *nodeclient.Client
+	nodeClient *nodeclient.Client
+	// links runs this session's peer links (network/links grants).
+	links        *peerlink.Manager
 	nodeEndpoint string
 	// inviter handles signed joiner direct-bootstrap requests once the node
 	// pairs a joiner with this agent; bootstrapListener owns the UDP socket
@@ -483,6 +486,11 @@ func (a *Agent) Run(ctx context.Context) (err error) {
 			profiles := a.memberProfiles
 			a.mu.Unlock()
 			a.syncMemberPeers(runCtx, profiles)
+			if a.links != nil {
+				// A recreated interface lost the linked peers
+				a.links.Reapply()
+				go a.watchLinks(runCtx, sender)
+			}
 			if a.activateNetwork != nil {
 				if err := a.activateNetwork(); err != nil {
 					_ = a.stopInterface()
@@ -538,10 +546,18 @@ func (a *Agent) Run(ctx context.Context) (err error) {
 	}); err != nil {
 		return fmt.Errorf("hubnet: register invitation API: %w", err)
 	}
+	links, err := a.newLinkManager()
+	if err != nil {
+		return fmt.Errorf("hubnet: peer links: %w", err)
+	}
+	a.links = links
+	go links.Run(runCtx)
 	nodeClient, err := nodeclient.New(nodeclient.Options{
 		Endpoint: a.currentNodeEndpoint,
 		Identity: a.profileID,
 		Logger:   a.logger,
+		Links:    links.Handle,
+		Presence: links.PresenceChanged,
 		// The inviter's bootstrap listener owns one UDP socket: it sends the
 		// invitation probe (so the node-observed endpoint is the listener
 		// address) and accepts framed signed requests from joiners. Declared
