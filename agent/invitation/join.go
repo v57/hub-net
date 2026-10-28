@@ -736,13 +736,25 @@ type hubServiceBinder struct {
 }
 
 func (b hubServiceBinder) Bind(ctx context.Context, address any, id *identity.Identity, wireGuardKey, name string, admission protocol.DirectBootstrapResponse) (BindResult, error) {
+	result, err := bindOnce(ctx, address, id, wireGuardKey, name, admission, b.device)
+	if err != nil && b.device != nil && strings.Contains(err.Error(), "device_endpoint_exists") {
+		// The hub still counts an earlier agent of this device as connected
+		// (one that went away without closing its connection). Bind the key
+		// alone, as before devices: the session presents the device again on
+		// every connect, and its bind succeeds once the hub lets the old one go.
+		return bindOnce(ctx, address, id, wireGuardKey, name, admission, nil)
+	}
+	return result, err
+}
+
+func bindOnce(ctx context.Context, address any, id *identity.Identity, wireGuardKey, name string, admission protocol.DirectBootstrapResponse, device *hubservice.DeviceKey) (BindResult, error) {
 	ready := make(chan struct{})
 	var once sync.Once
 	svc, err := hubconn.New(hubconn.Options{
 		Address:  address,
 		Identity: id,
 		Name:     name,
-		Device:   b.device,
+		Device:   device,
 		OnConnect: func(*channelgo.Sender) {
 			once.Do(func() { close(ready) })
 		},

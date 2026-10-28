@@ -740,15 +740,19 @@ func (a *Agent) Run(ctx context.Context) (err error) {
 		}
 		a.mu.Unlock()
 	}()
+	// Deferred calls run last first: the gateway goes, then the Hub
+	// connection closes while the tunnel it may run through is still up (so
+	// the hub sees it end, and a rejoin isn't refused as a second endpoint of
+	// this device), then the interface goes.
+	defer func() {
+		if err := a.stopInterface(); err != nil {
+			a.logger.Error("wireguard interface teardown failed", slog.String("err", err.Error()))
+		}
+	}()
 	defer svc.Stop()
 	defer func() {
 		if err := a.disableGateway(context.Background(), false); err != nil {
 			a.logger.Error("gateway teardown failed", slog.String("err", err.Error()))
-		}
-	}()
-	defer func() {
-		if err := a.stopInterface(); err != nil {
-			a.logger.Error("wireguard interface teardown failed", slog.String("err", err.Error()))
 		}
 	}()
 	var dnsErr error
