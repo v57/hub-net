@@ -65,6 +65,7 @@ type ConnectionReporter interface {
 // once it registers.
 type AddressReporter interface {
 	OverlayAddress() string
+	OverlayIPv6() string
 }
 
 type Session interface {
@@ -103,9 +104,10 @@ type Snapshot struct {
 	Status     Status
 	Error      string
 	UpdatedAt  time.Time
-	// OverlayIPv4 is the session's live overlay address, else the
-	// membership's recorded one.
+	// OverlayIPv4 and OverlayIPv6 are the session's live overlay addresses,
+	// else the membership's recorded ones.
 	OverlayIPv4 string
+	OverlayIPv6 string
 }
 
 type managedSession struct {
@@ -295,10 +297,12 @@ func (s *Supervisor) Snapshots() []Snapshot {
 			Status:      managed.status,
 			UpdatedAt:   managed.updatedAt,
 			OverlayIPv4: managed.membership.OverlayIPv4,
+			OverlayIPv6: managed.membership.OverlayIPv6,
 		}
 		if reporter, ok := managed.session.(AddressReporter); ok {
 			if address := reporter.OverlayAddress(); address != "" {
 				snapshot.OverlayIPv4 = address
+				snapshot.OverlayIPv6 = reporter.OverlayIPv6()
 			}
 		}
 		if reporter, ok := managed.session.(ConnectionReporter); ok &&

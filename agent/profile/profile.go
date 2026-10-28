@@ -37,6 +37,7 @@ type Profile struct {
 	registeredAt    time.Time
 	generation      uint64
 	overlayAddress  string
+	overlayIPv6     string
 	hubNetworkID    string
 	hubKey          string // base64 SPKI of the trusted Hub signing key
 }
@@ -124,6 +125,14 @@ func (p *Profile) ConfirmRegistration(overlayAddress, hubNetworkID string, gener
 	p.generation = generation
 }
 
+// SetOverlayIPv6 records the IPv6 overlay address the Hub assigned at
+// registration (empty when it assigned none).
+func (p *Profile) SetOverlayIPv6(address string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.overlayIPv6 = address
+}
+
 // HubKey returns the trusted Hub signing key learned at registration or seeded
 // from the first verified grant. Empty until the Hub has been contacted.
 func (p *Profile) HubKey() string {
@@ -174,8 +183,10 @@ type Snapshot struct {
 	RegisteredAt    time.Time
 	Generation      uint64
 	OverlayAddress  string
-	HubNetworkID    string
-	HubKey          string
+	// OverlayIPv6 is the IPv6 overlay address the Hub assigned, if any.
+	OverlayIPv6  string
+	HubNetworkID string
+	HubKey       string
 }
 
 // Snapshot returns an immutable copy of the profile state.
@@ -191,6 +202,7 @@ func (p *Profile) Snapshot() Snapshot {
 		RegisteredAt:    p.registeredAt,
 		Generation:      p.generation,
 		OverlayAddress:  p.overlayAddress,
+		OverlayIPv6:     p.overlayIPv6,
 		HubNetworkID:    p.hubNetworkID,
 		HubKey:          p.hubKey,
 	}

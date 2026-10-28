@@ -247,16 +247,6 @@ func (s *Service) setPaused(paused bool, alias string) error {
 		return nil
 	}
 	if paused {
-		// The session restarts with the recorded address: keep the one the
-		// Hub registered it with. A device that joined the Hub before keeps
-		// its earlier address there while its join may have recorded a new one.
-		for _, item := range s.daemon.List() {
-			if item.ID == stored.Record.ID && item.OverlayIPv4 != "" && item.OverlayIPv4 != stored.Record.CanonicalIPv4 {
-				if _, err := s.store.UpdateCanonicalIPv4(stored.Record.ID, item.OverlayIPv4); err != nil {
-					return err
-				}
-			}
-		}
 		if err := s.daemon.Remove(stored.Record.ID); err != nil {
 			return err
 		}

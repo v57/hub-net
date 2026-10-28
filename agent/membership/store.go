@@ -335,16 +335,30 @@ func (s *Store) UpdatePaused(id string, paused bool) (Stored, error) {
 	return s.loadOne(id)
 }
 
-// UpdateCanonicalIPv4 persists the overlay address the Hub registered the
-// membership with, when it differs from the one its join recorded.
-func (s *Store) UpdateCanonicalIPv4(id, address string) (Stored, error) {
+// UpdateCanonical persists the overlay addresses the Hub registered the
+// membership with at its latest hub/net/bind. They can differ from the ones
+// its join recorded: a device that was on the Hub before keeps its earlier
+// addresses there. Empty values leave the recorded ones; an unchanged record
+// is not rewritten.
+func (s *Store) UpdateCanonical(id, ipv4, ipv6 string) (Stored, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	stored, err := s.loadOne(id)
 	if err != nil {
 		return Stored{}, err
 	}
-	stored.Record.CanonicalIPv4 = address
+	changed := false
+	if ipv4 != "" && ipv4 != stored.Record.CanonicalIPv4 {
+		stored.Record.CanonicalIPv4 = ipv4
+		changed = true
+	}
+	if ipv6 != "" && ipv6 != stored.Record.CanonicalIPv6 {
+		stored.Record.CanonicalIPv6 = ipv6
+		changed = true
+	}
+	if !changed {
+		return stored, nil
+	}
 	if err := s.writeRecord(stored.Record); err != nil {
 		return Stored{}, fmt.Errorf("membership: update address: %w", err)
 	}

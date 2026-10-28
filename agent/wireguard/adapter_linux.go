@@ -132,9 +132,11 @@ func (a *linuxAdapter) Up(config InterfaceConfig) error {
 	if err != nil {
 		return fmt.Errorf("wireguard: route dump: %w", err)
 	}
-	selfAddrs := make([]netip.Addr, 0, 1)
-	if config.Address.IsValid() {
-		selfAddrs = append(selfAddrs, config.Address)
+	selfAddrs := make([]netip.Addr, 0, 2)
+	for _, address := range []netip.Addr{config.Address, config.AddressIPv6} {
+		if address.IsValid() {
+			selfAddrs = append(selfAddrs, address)
+		}
 	}
 	if conflict, ok := FindOverlayRouteConflict(preForeign, selfAddrs...); ok {
 		return fmt.Errorf("%w: %s", ErrOverlayRouteConflict, conflict)
@@ -151,10 +153,10 @@ func (a *linuxAdapter) Up(config InterfaceConfig) error {
 		_ = a.deleteInterfaceLocked(config.Name)
 		return fmt.Errorf("wireguard: configure interface: %w", err)
 	}
-	if config.Address.IsValid() {
+	for _, address := range selfAddrs {
 		// Address assignment is best-effort at this layer: a stale address
 		// from a prior run is not fatal. Diagnostics surface via State().
-		_ = a.addAddressLocked(config.Name, config.Address)
+		_ = a.addAddressLocked(config.Name, address)
 	}
 	if err := a.setUpFlagLocked(config.Name); err != nil {
 		// Roll back: drop the interface so a retry starts clean.
@@ -176,7 +178,11 @@ func (a *linuxAdapter) Up(config InterfaceConfig) error {
 	}
 	installed := make([]netip.Prefix, 0, 2)
 	for _, route := range OverlayRoutes() {
-		if err := a.installOverlayRouteLocked(route, idx, config.Address); err != nil {
+		source := config.Address
+		if route.Addr().Is6() {
+			source = config.AddressIPv6
+		}
+		if err := a.installOverlayRouteLocked(route, idx, source); err != nil {
 			// Roll back the routes we did install, then drop the interface.
 			for _, done := range installed {
 				_ = a.uninstallOverlayRouteLocked(done, idx)

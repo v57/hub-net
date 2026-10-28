@@ -147,12 +147,9 @@ func (r *Registrar) Register(ctx context.Context, sender *channelgo.Sender) erro
 	}
 	// Persist Hub trust returned by binding so compact invitations can identify
 	// their signer without carrying the Hub public key.
-	r.profile.ConfirmRegistration(
-		firstOrEmpty(registered.OverlayAddresses),
-		registered.HubNetworkID,
-		0,
-		registered.HubKey,
-	)
+	ipv4, ipv6 := splitOverlayAddresses(registered.OverlayAddresses)
+	r.profile.ConfirmRegistration(ipv4, registered.HubNetworkID, 0, registered.HubKey)
+	r.profile.SetOverlayIPv6(ipv6)
 	return nil
 }
 
@@ -230,9 +227,19 @@ type extractedProfile struct {
 	HubNetworkID     string
 }
 
-func firstOrEmpty(values []string) string {
-	if len(values) == 0 {
-		return ""
+// splitOverlayAddresses picks the first IPv4 and the first IPv6 address of a
+// Hub profile's overlay addresses. A list without a family marker keeps its
+// first entry as the IPv4 address, as older hubs sent it.
+func splitOverlayAddresses(addresses []string) (ipv4, ipv6 string) {
+	for _, address := range addresses {
+		switch {
+		case strings.Contains(address, ":"):
+			if ipv6 == "" {
+				ipv6 = address
+			}
+		case ipv4 == "":
+			ipv4 = address
+		}
 	}
-	return values[0]
+	return ipv4, ipv6
 }

@@ -48,6 +48,9 @@ type InterfaceConfig struct {
 	PrivateKey []byte
 	// Address is the agent overlay address.
 	Address netip.Addr
+	// AddressIPv6 is the agent's IPv6 overlay address, when the Hub assigned
+	// one.
+	AddressIPv6 netip.Addr
 	// ListenPort is the UDP listen port.
 	ListenPort uint16
 	// Peers are the currently configured peers.

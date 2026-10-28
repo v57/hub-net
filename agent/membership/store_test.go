@@ -197,3 +197,37 @@ func TestLoadFinishesInterruptedRemoval(t *testing.T) {
 		t.Fatalf("removal tombstone survived: %+v, %v", current, err)
 	}
 }
+
+func TestUpdateCanonicalRecordsTheRegisteredAddresses(t *testing.T) {
+	dir := t.TempDir()
+	store, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record := testRecord("one")
+	record.CanonicalIPv4, record.CanonicalIPv6 = "100.96.0.4", "fd48:5542:4e45::4"
+	if err := store.Stage(record); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Commit("one"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.UpdateCanonical("one", "100.96.0.3", "fd48:5542:4e45::3"); err != nil {
+		t.Fatal(err)
+	}
+	// An empty value keeps the recorded address
+	if _, err := store.UpdateCanonical("one", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stored, found, err := reopened.FindAlias("one")
+	if err != nil || !found {
+		t.Fatalf("find: %v %v", found, err)
+	}
+	if stored.Record.CanonicalIPv4 != "100.96.0.3" || stored.Record.CanonicalIPv6 != "fd48:5542:4e45::3" {
+		t.Fatalf("addresses = %s %s", stored.Record.CanonicalIPv4, stored.Record.CanonicalIPv6)
+	}
+}

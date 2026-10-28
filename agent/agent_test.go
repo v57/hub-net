@@ -205,6 +205,47 @@ func TestConfigureInterfaceUsesRegisteredOverlayAndRollsBack(t *testing.T) {
 	}
 }
 
+// A member that was on the Hub before keeps its earlier addresses there while
+// its join may have recorded new ones: the interface takes the addresses of
+// the latest hub/net/bind, both families, and the caller hears of them so a
+// restart comes up with them.
+func TestConfigureInterfaceTakesTheRegisteredAddressesAndReportsThem(t *testing.T) {
+	adapter := wireguard.NewFakeAdapter()
+	var reported []string
+	agent, err := New(Options{
+		Config: newConfig(t), Adapter: adapter,
+		OverlayAddress: "100.96.0.4", OverlayIPv6: "fd48:5542:4e45::4",
+		OnRegistered: func(ipv4, ipv6 string) { reported = append(reported, ipv4, ipv6) },
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if err := agent.Prepare(context.Background()); err != nil {
+		t.Fatalf("Prepare: %v", err)
+	}
+	if err := agent.bringUpInterface(agent.knownAddress, agent.knownIPv6); err != nil {
+		t.Fatalf("bringUpInterface: %v", err)
+	}
+	if state, _ := adapter.State(); state.Address.String() != "100.96.0.4" || state.AddressIPv6.String() != "fd48:5542:4e45::4" {
+		t.Fatalf("restart addresses = %s %s", state.Address, state.AddressIPv6)
+	}
+	agent.profile.ConfirmRegistration("100.96.0.3", "network", 1)
+	agent.profile.SetOverlayIPv6("fd48:5542:4e45::3")
+	if err := agent.configureInterface(); err != nil {
+		t.Fatalf("configureInterface: %v", err)
+	}
+	state, up := adapter.State()
+	if !up || state.Address.String() != "100.96.0.3" || state.AddressIPv6.String() != "fd48:5542:4e45::3" {
+		t.Fatalf("interface = %v %s %s, want the registered addresses", up, state.Address, state.AddressIPv6)
+	}
+	if len(reported) != 2 || reported[0] != "100.96.0.3" || reported[1] != "fd48:5542:4e45::3" {
+		t.Fatalf("reported %v", reported)
+	}
+	if agent.OverlayAddress() != "100.96.0.3" || agent.OverlayIPv6() != "fd48:5542:4e45::3" {
+		t.Fatalf("live addresses %s %s", agent.OverlayAddress(), agent.OverlayIPv6())
+	}
+}
+
 func TestConfigureInterfaceFailsClosed(t *testing.T) {
 	for _, address := range []string{"", "192.0.2.1", "not-an-address"} {
 		t.Run(address, func(t *testing.T) {

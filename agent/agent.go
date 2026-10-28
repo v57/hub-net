@@ -94,7 +94,10 @@ type Agent struct {
 	production         bool
 	bindingKind        protocol.LocalAgentBindingKind
 	knownAddress       netip.Addr
+	knownIPv6          netip.Addr
 	interfaceAddress   netip.Addr
+	interfaceIPv6      netip.Addr
+	onRegistered       func(ipv4, ipv6 string)
 	// memberProfiles is the latest network/agents/list snapshot and
 	// memberPeers the member WireGuard peers installed from it (hub host
 	// agent only), keyed by base64 WireGuard key. Guarded by mu.
@@ -195,6 +198,13 @@ type Options struct {
 	// a member reaches hub-server only through the tunnel, so the session brings
 	// the interface up with it (and InitialPeers) before connecting.
 	OverlayAddress string
+	// OverlayIPv6 is the member's IPv6 overlay address, brought up with
+	// OverlayAddress.
+	OverlayIPv6 string
+	// OnRegistered receives the overlay addresses the Hub assigned at every
+	// hub/net/bind, so the caller can keep the membership record in step: a
+	// restart brings the interface up with them before it can ask again.
+	OnRegistered func(ipv4, ipv6 string)
 	// BindingKind is sent with hub/net/bind on every connect. Empty means
 	// "machine": the agent on the same host as hub-server, proven over the local
 	// agent socket. Memberships created by an invitation join use "join".
@@ -274,6 +284,8 @@ func New(options Options) (*Agent, error) {
 		production:         options.Production,
 		bindingKind:        options.BindingKind,
 		knownAddress:       parseOptionalAddr(options.OverlayAddress),
+		knownIPv6:          parseOptionalAddr(options.OverlayIPv6),
+		onRegistered:       options.OnRegistered,
 		interfaceName:      interfaceName,
 		initialPeers:       append([]wireguard.PeerConfig(nil), options.InitialPeers...),
 		generations:        make(map[string]uint64),
@@ -777,7 +789,7 @@ func (a *Agent) Run(ctx context.Context) (err error) {
 		// hub-server is reachable only through the overlay; without the tunnel
 		// the first connect (and so the interface setup in OnConnect) never
 		// happens after a restart.
-		if err := a.bringUpInterface(a.knownAddress); err != nil {
+		if err := a.bringUpInterface(a.knownAddress, a.knownIPv6); err != nil {
 			a.logger.Error("wireguard interface setup failed", slog.String("err", err.Error()))
 		}
 	}
@@ -1359,17 +1371,30 @@ func (a *Agent) configureInterface() error {
 	if !wireguard.IPv4OverlayPrefix.Contains(address) && !wireguard.IPv6OverlayPrefix.Contains(address) {
 		return fmt.Errorf("hubnet: overlay address outside reserved ranges: %s", address)
 	}
-	return a.bringUpInterface(address)
+	var ipv6 netip.Addr
+	if snapshot.OverlayIPv6 != "" {
+		ipv6, err = netip.ParseAddr(snapshot.OverlayIPv6)
+		if err != nil || !wireguard.IPv6OverlayPrefix.Contains(ipv6) {
+			return fmt.Errorf("hubnet: invalid IPv6 overlay address %q", snapshot.OverlayIPv6)
+		}
+	}
+	if err := a.bringUpInterface(address, ipv6); err != nil {
+		return err
+	}
+	if a.onRegistered != nil {
+		a.onRegistered(address.String(), snapshot.OverlayIPv6)
+	}
+	return nil
 }
 
-// bringUpInterface starts the WireGuard interface with address and the
-// initial peers. A running interface with the same address is left alone:
-// a joined member's Hub connection runs through it, and tearing it down on
-// every reconnect would cut that connection.
-func (a *Agent) bringUpInterface(address netip.Addr) error {
+// bringUpInterface starts the WireGuard interface with the overlay addresses
+// and the initial peers. A running interface with the same addresses is left
+// alone: a joined member's Hub connection runs through it, and tearing it
+// down on every reconnect would cut that connection.
+func (a *Agent) bringUpInterface(address, ipv6 netip.Addr) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	if a.networkUp && a.interfaceAddress == address {
+	if a.networkUp && a.interfaceAddress == address && a.interfaceIPv6 == ipv6 {
 		return nil
 	}
 	if a.networkUp {
@@ -1379,11 +1404,12 @@ func (a *Agent) bringUpInterface(address netip.Addr) error {
 		a.networkUp = false
 	}
 	config := wireguard.InterfaceConfig{
-		Name:       a.interfaceName,
-		PrivateKey: append([]byte(nil), a.wgPrivate...),
-		Address:    address,
-		ListenPort: wireguard.DefaultPort,
-		Peers:      append([]wireguard.PeerConfig(nil), a.initialPeers...),
+		Name:        a.interfaceName,
+		PrivateKey:  append([]byte(nil), a.wgPrivate...),
+		Address:     address,
+		AddressIPv6: ipv6,
+		ListenPort:  wireguard.DefaultPort,
+		Peers:       append([]wireguard.PeerConfig(nil), a.initialPeers...),
 	}
 	if err := a.adapter.Up(config); err != nil {
 		_ = a.adapter.Down()
@@ -1391,6 +1417,7 @@ func (a *Agent) bringUpInterface(address netip.Addr) error {
 	}
 	a.networkUp = true
 	a.interfaceAddress = address
+	a.interfaceIPv6 = ipv6
 	return nil
 }
 
@@ -1433,6 +1460,18 @@ func (a *Agent) OverlayAddress() string {
 		return ""
 	}
 	return prof.Snapshot().OverlayAddress
+}
+
+// OverlayIPv6 reports the IPv6 overlay address the Hub assigned this session,
+// empty before it registers or when it assigned none.
+func (a *Agent) OverlayIPv6() string {
+	a.mu.Lock()
+	prof := a.profile
+	a.mu.Unlock()
+	if prof == nil {
+		return ""
+	}
+	return prof.Snapshot().OverlayIPv6
 }
 
 // Shutdown signals Run to stop. Safe to call multiple times.

@@ -41,6 +41,7 @@ import (
 	"github.com/v57/hub-net/hubconn"
 	"github.com/v57/hub-net/nodeclient"
 	"github.com/v57/hub-net/wireguard"
+	hubservice "github.com/v57/hub-service-go"
 )
 
 // joinTimeout bounds the rendezvous phase (probe, session pairing, candidate
@@ -67,6 +68,11 @@ type JoinOptions struct {
 	// Binder authenticates with hub-server and issues hub/net/bind. Defaults to
 	// the real hubservice binder.
 	Binder Binder
+	// Device certifies Identity with this device's key at hub/net/bind, as
+	// the daemon session does on every connect. The Hub keys a device's
+	// addresses by the device, so the join and the session then land on the
+	// same ones. Nil binds the key alone.
+	Device *hubservice.DeviceKey
 	// Logger receives progress. Defaults to a discard logger.
 	Logger *slog.Logger
 	// Timeout bounds the whole join (rendezvous, direct exchange, and bind).
@@ -149,7 +155,7 @@ func Join(ctx context.Context, options JoinOptions) (JoinResult, error) {
 	}
 	binder := options.Binder
 	if binder == nil {
-		binder = hubServiceBinder{}
+		binder = hubServiceBinder{device: options.Device}
 	}
 
 	decoded, err := Decode(options.Code, now())
@@ -725,15 +731,18 @@ func LoadInviterPeers(path string) ([]wireguard.PeerConfig, error) {
 }
 
 // hubServiceBinder issues hub/net/bind through the real hub-server service SDK.
-type hubServiceBinder struct{}
+type hubServiceBinder struct {
+	device *hubservice.DeviceKey
+}
 
-func (hubServiceBinder) Bind(ctx context.Context, address any, id *identity.Identity, wireGuardKey, name string, admission protocol.DirectBootstrapResponse) (BindResult, error) {
+func (b hubServiceBinder) Bind(ctx context.Context, address any, id *identity.Identity, wireGuardKey, name string, admission protocol.DirectBootstrapResponse) (BindResult, error) {
 	ready := make(chan struct{})
 	var once sync.Once
 	svc, err := hubconn.New(hubconn.Options{
 		Address:  address,
 		Identity: id,
 		Name:     name,
+		Device:   b.device,
 		OnConnect: func(*channelgo.Sender) {
 			once.Do(func() { close(ready) })
 		},

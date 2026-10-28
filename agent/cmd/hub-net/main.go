@@ -29,6 +29,7 @@ import (
 	"github.com/v57/hub-net/publications"
 	"github.com/v57/hub-net/supervisor"
 	"github.com/v57/hub-net/wireguard"
+	hubservice "github.com/v57/hub-service-go"
 )
 
 var buildVersion = "dev"
@@ -128,6 +129,14 @@ func run(args []string) error {
 			Config: sessionConfig, Logger: logger, Production: true,
 			BindingKind:    bindingKind,
 			OverlayAddress: member.OverlayIPv4,
+			OverlayIPv6:    member.OverlayIPv6,
+			// A restart brings the interface up with the recorded addresses
+			// before it reaches the Hub: record the ones it registered.
+			OnRegistered: func(ipv4, ipv6 string) {
+				if _, err := store.UpdateCanonical(member.ID, ipv4, ipv6); err != nil {
+					logger.Warn("membership address not recorded", "hub", member.Alias, "err", err.Error())
+				}
+			},
 			InterfaceName:  member.InterfaceName,
 			InitialShares:  shares,
 			GatewayAllowed: member.GatewayAllowed,
@@ -137,7 +146,7 @@ func run(args []string) error {
 	if err != nil {
 		return err
 	}
-	join, err := newJoin(store, *stateDir, logger)
+	join, err := newJoin(store, *stateDir, *deviceKey, logger)
 	if err != nil {
 		return err
 	}
@@ -186,7 +195,7 @@ func run(args []string) error {
 // key pair per invitation, performs the direct bootstrap join, persists the
 // per-membership key material and the inviter peer, and returns the membership
 // record the daemon adopts.
-func newJoin(store *membership.Store, stateDir string, logger *slog.Logger) (management.JoinFunc, error) {
+func newJoin(store *membership.Store, stateDir, deviceKeyPath string, logger *slog.Logger) (management.JoinFunc, error) {
 	stage, err := invitation.NewFileStore(filepath.Join(stateDir, "invitations"))
 	if err != nil {
 		return nil, err
@@ -209,11 +218,18 @@ func newJoin(store *membership.Store, stateDir string, logger *slog.Logger) (man
 		if err != nil || len(wireGuardKey) != 32 {
 			return management.JoinResult{}, errors.New("hub-net: corrupt staged wireguard key")
 		}
+		// The session presents this device at every bind; the join presents
+		// it too, so both land on the addresses the Hub keeps for the device.
+		device, err := loadDeviceKey(deviceKeyPath)
+		if err != nil {
+			return management.JoinResult{}, fmt.Errorf("hub-net: join: device key: %w", err)
+		}
 		interfaceName := nextInterfaceName(store)
 		adapter := wireguard.NewPlatformAdapter(interfaceName)
 		result, err := invitation.Join(ctx, invitation.JoinOptions{
 			Code: code, Identity: id, WireGuardKey: wireGuardKey,
 			InterfaceName: interfaceName, Adapter: adapter, Logger: logger,
+			Device: device,
 		})
 		if err != nil {
 			return management.JoinResult{}, err
@@ -483,4 +499,13 @@ func logFormat(json bool) logging.Format {
 		return logging.FormatJSON
 	}
 	return logging.FormatText
+}
+
+// loadDeviceKey loads the device key the daemon's sessions present (see
+// Agent.loadDeviceKey): the -device-key file, else the default location.
+func loadDeviceKey(path string) (*hubservice.DeviceKey, error) {
+	if path != "" {
+		return hubservice.LoadDeviceKeyFile(path)
+	}
+	return hubservice.LoadDeviceKey()
 }

@@ -231,6 +231,14 @@ func (s translatedSession) OverlayAddress() string {
 	return ""
 }
 
+// OverlayIPv6 forwards the wrapped session's IPv6 overlay address.
+func (s translatedSession) OverlayIPv6() string {
+	if reporter, ok := s.Session.(supervisor.AddressReporter); ok {
+		return reporter.OverlayIPv6()
+	}
+	return ""
+}
+
 func (s translatedSession) Run(ctx context.Context) error {
 	defer s.manager.Deactivate(s.membershipID)
 	return s.Session.Run(ctx)
@@ -266,7 +274,7 @@ func (d *Daemon) List() []HubListItem {
 			NodeURL:     snapshot.Membership.NodeURL, Error: snapshot.Error,
 			GatewayAllowed: snapshot.Membership.GatewayAllowed,
 			OverlayIPv4:    snapshot.OverlayIPv4,
-			OverlayIPv6:    snapshot.Membership.OverlayIPv6,
+			OverlayIPv6:    snapshot.OverlayIPv6,
 		})
 	}
 	return items
