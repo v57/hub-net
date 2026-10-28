@@ -178,11 +178,10 @@ func (a *linuxAdapter) Up(config InterfaceConfig) error {
 	}
 	installed := make([]netip.Prefix, 0, 2)
 	for _, route := range OverlayRoutes() {
-		source := config.Address
-		if route.Addr().Is6() {
-			source = config.AddressIPv6
-		}
-		if err := a.installOverlayRouteLocked(route, idx, source); err != nil {
+		// Only the IPv4 route names its source: the kernel refuses an IPv6
+		// preferred source that is still tentative, and the interface's only
+		// global IPv6 address is the one it picks anyway.
+		if err := a.installOverlayRouteLocked(route, idx, config.Address); err != nil {
 			// Roll back the routes we did install, then drop the interface.
 			for _, done := range installed {
 				_ = a.uninstallOverlayRouteLocked(done, idx)
@@ -517,6 +516,7 @@ func (a *linuxAdapter) addAddressLocked(name string, addr netip.Addr) error {
 	}
 	var family uint8
 	var prefixLen uint8
+	var flags uint8
 	var ipBytes []byte
 	if addr.Is4() {
 		family = unix.AF_INET
@@ -525,13 +525,16 @@ func (a *linuxAdapter) addAddressLocked(name string, addr netip.Addr) error {
 	} else {
 		family = unix.AF_INET6
 		prefixLen = 128
+		// A point-to-point overlay address has no neighbours to clash with:
+		// skip duplicate address detection so it is usable at once.
+		flags = unix.IFA_F_NODAD
 		b16 := addr.As16()
 		ipBytes = b16[:]
 	}
 	hdr := make([]byte, unix.NLMSG_HDRLEN+sizeofIfaddrmsg)
 	binary.LittleEndian.PutUint16(hdr[4:], unix.RTM_NEWADDR)
 	binary.LittleEndian.PutUint16(hdr[6:], unix.NLM_F_REQUEST|unix.NLM_F_ACK|unix.NLM_F_CREATE|unix.NLM_F_EXCL)
-	am := ifaddrmsg{Family: family, PrefixLen: prefixLen, Scope: unix.RT_SCOPE_UNIVERSE, Index: uint32(idx)}
+	am := ifaddrmsg{Family: family, PrefixLen: prefixLen, Flags: flags, Scope: unix.RT_SCOPE_UNIVERSE, Index: uint32(idx)}
 	putIfaddrmsg(hdr[unix.NLMSG_HDRLEN:], &am)
 	w := newNlmsgWriter(hdr)
 	w.PutBytes(unix.IFA_LOCAL, ipBytes)
