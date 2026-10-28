@@ -36,6 +36,9 @@ type Record struct {
 	// Local marks the hub that runs on this machine: its session binds as the
 	// machine-local agent. Joined hubs bind with the join kind.
 	Local bool `json:"local,omitempty"`
+	// Paused keeps the membership with its keys and address but no session:
+	// no interface, routes or Hub connection until it is resumed.
+	Paused bool `json:"paused,omitempty"`
 }
 
 type Stored struct {
@@ -313,6 +316,37 @@ func (s *Store) UpdateGateway(id string, allowed bool) (Stored, error) {
 	stored.Record.GatewayAllowed = allowed
 	if err := s.writeRecord(stored.Record); err != nil {
 		return Stored{}, fmt.Errorf("membership: update gateway: %w", err)
+	}
+	return s.loadOne(id)
+}
+
+// UpdatePaused persists whether the membership's session is paused.
+func (s *Store) UpdatePaused(id string, paused bool) (Stored, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	stored, err := s.loadOne(id)
+	if err != nil {
+		return Stored{}, err
+	}
+	stored.Record.Paused = paused
+	if err := s.writeRecord(stored.Record); err != nil {
+		return Stored{}, fmt.Errorf("membership: update paused: %w", err)
+	}
+	return s.loadOne(id)
+}
+
+// UpdateCanonicalIPv4 persists the overlay address the Hub registered the
+// membership with, when it differs from the one its join recorded.
+func (s *Store) UpdateCanonicalIPv4(id, address string) (Stored, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	stored, err := s.loadOne(id)
+	if err != nil {
+		return Stored{}, err
+	}
+	stored.Record.CanonicalIPv4 = address
+	if err := s.writeRecord(stored.Record); err != nil {
+		return Stored{}, fmt.Errorf("membership: update address: %w", err)
 	}
 	return s.loadOne(id)
 }

@@ -395,3 +395,57 @@ func TestVPNAllowRemovePersistsAndIsIdempotent(t *testing.T) {
 		}
 	}
 }
+
+func TestPauseResumeKeepsTheMembershipAndListsIt(t *testing.T) {
+	service, daemon, store := testService(t, nil)
+	joined := result("pause-id", "work")
+	joined.Record.CanonicalIPv4 = "100.96.0.3"
+	if err := store.Stage(joined.Record); err != nil {
+		t.Fatal(err)
+	}
+	stored, err := store.Commit(joined.Record.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := daemon.Add(toSupervisor(stored)); err != nil {
+		t.Fatal(err)
+	}
+	execute := func(args ...string) Response {
+		t.Helper()
+		request, err := ParseCommand(args)
+		if err != nil {
+			t.Fatal(err)
+		}
+		response := service.Execute(context.Background(), request)
+		if response.Error != "" {
+			t.Fatal(response.Error)
+		}
+		return response
+	}
+	for range 2 {
+		execute("pause", "work")
+		if len(daemon.List()) != 0 {
+			t.Fatal("a paused membership keeps its session")
+		}
+		items := execute("list").Items
+		if len(items) != 1 || items[0].Status != supervisor.StatusPaused || items[0].OverlayIPv4 != "100.96.0.3" {
+			t.Fatalf("list while paused = %+v", items)
+		}
+	}
+	for range 2 {
+		execute("resume", "work")
+		items := execute("list").Items
+		if len(items) != 1 || items[0].Status != supervisor.StatusConnected {
+			t.Fatalf("list after resume = %+v", items)
+		}
+	}
+	reloaded, found, err := store.FindAlias("work")
+	if err != nil || !found || reloaded.Record.Paused {
+		t.Fatalf("persisted paused = %v, found = %v, err = %v", reloaded.Record.Paused, found, err)
+	}
+	execute("pause", "work")
+	execute("leave", "work")
+	if items := execute("list").Items; len(items) != 0 {
+		t.Fatalf("leaving a paused membership leaves %+v", items)
+	}
+}

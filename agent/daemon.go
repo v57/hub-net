@@ -33,6 +33,10 @@ type HubListItem struct {
 	NodeURL        string            `json:"nodeUrl"`
 	Error          string            `json:"error,omitempty"`
 	GatewayAllowed bool              `json:"gatewayAllowed"`
+	// OverlayIPv4 and OverlayIPv6 are this device's addresses on the Hub's
+	// network (canonical, before any translation).
+	OverlayIPv4 string `json:"overlayIpv4,omitempty"`
+	OverlayIPv6 string `json:"overlayIpv6,omitempty"`
 }
 
 func NewDaemon(options SessionOptions) (*Daemon, error) {
@@ -132,6 +136,9 @@ func (d *Daemon) Restore(store *membership.Store) ([]membership.Diagnostic, erro
 		return nil, err
 	}
 	for _, stored := range records {
+		if stored.Record.Paused {
+			continue
+		}
 		if d.translation != nil {
 			if allocationErr := d.translation.CleanStale(
 				stored.Record.InterfaceName,
@@ -190,6 +197,7 @@ func (d *Daemon) Restore(store *membership.Store) ([]membership.Diagnostic, erro
 			GatewayAllowed:   stored.Record.GatewayAllowed,
 			Local:            stored.Record.Local,
 			OverlayIPv4:      stored.Record.CanonicalIPv4,
+			OverlayIPv6:      stored.Record.CanonicalIPv6,
 		}
 		if err := d.Add(record); err != nil {
 			if d.translation != nil {
@@ -213,6 +221,14 @@ type translatedSession struct {
 func (s translatedSession) Connected() bool {
 	reporter, ok := s.Session.(supervisor.ConnectionReporter)
 	return !ok || reporter.Connected()
+}
+
+// OverlayAddress forwards the wrapped session's overlay address.
+func (s translatedSession) OverlayAddress() string {
+	if reporter, ok := s.Session.(supervisor.AddressReporter); ok {
+		return reporter.OverlayAddress()
+	}
+	return ""
 }
 
 func (s translatedSession) Run(ctx context.Context) error {
@@ -249,6 +265,8 @@ func (d *Daemon) List() []HubListItem {
 			VirtualIPv6: snapshot.Membership.TranslatedIPv6,
 			NodeURL:     snapshot.Membership.NodeURL, Error: snapshot.Error,
 			GatewayAllowed: snapshot.Membership.GatewayAllowed,
+			OverlayIPv4:    snapshot.OverlayIPv4,
+			OverlayIPv6:    snapshot.Membership.OverlayIPv6,
 		})
 	}
 	return items

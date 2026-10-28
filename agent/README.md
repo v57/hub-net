@@ -126,6 +126,28 @@ Both files are written with mode `0600`. Rotation of either key never touches
 the other; Hub binds a new WireGuard public key to the same profile through a
 fresh short-lived grant.
 
+## Desktop app (Hub on Linux)
+
+The Hub app on Linux drives this agent instead of a packet tunnel. It sends
+the CLI's commands to the command socket (`POST /v1/command`): `join` with an
+invitation the hub's machine issued, `local` for the hub that runs on the same
+machine, `pause`/`resume` for its Hub Network switch (the membership, its keys
+and address stay; the interface, routes and Hub connection go), `leave`,
+`vpn allow|remove` and `list`, whose items carry the membership's
+`overlayIpv4` (the live one once the session registered) and `overlayIpv6`.
+
+The command socket is the state directory's `command.sock`, for the agent's
+user only. To let the desktop user send commands, start the agent with a
+shared socket:
+
+```sh
+hub-net -socket /run/hub-net/command.sock -socket-group hub-net
+```
+
+`-socket-group` makes the socket `0660` in that group; the directory must let
+the group through. The app looks for `/run/hub-net/command.sock`, then
+`/var/lib/hub-net/command.sock` (`HUB_NET_COMMAND_SOCKET` names another).
+
 ## Gateway serving
 
 Gateway serving defaults off independently for every Hub membership.

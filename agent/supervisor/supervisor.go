@@ -31,6 +31,7 @@ type Membership struct {
 	GatewayAllowed   bool
 	Local            bool
 	OverlayIPv4      string
+	OverlayIPv6      string
 }
 
 func (m Membership) validate() error {
@@ -57,6 +58,13 @@ func (m Membership) validate() error {
 // reached their Hub. A running session that has not is listed as starting.
 type ConnectionReporter interface {
 	Connected() bool
+}
+
+// AddressReporter is implemented by sessions that know the overlay address
+// their Hub assigned them, which a membership made with `local` learns only
+// once it registers.
+type AddressReporter interface {
+	OverlayAddress() string
 }
 
 type Session interface {
@@ -86,6 +94,8 @@ const (
 	StatusDisconnected Status = "disconnected"
 	StatusError        Status = "error"
 	StatusStopping     Status = "stopping"
+	// StatusPaused lists a stored membership that has no session.
+	StatusPaused Status = "paused"
 )
 
 type Snapshot struct {
@@ -93,6 +103,9 @@ type Snapshot struct {
 	Status     Status
 	Error      string
 	UpdatedAt  time.Time
+	// OverlayIPv4 is the session's live overlay address, else the
+	// membership's recorded one.
+	OverlayIPv4 string
 }
 
 type managedSession struct {
@@ -278,9 +291,15 @@ func (s *Supervisor) Snapshots() []Snapshot {
 	result := make([]Snapshot, 0, len(s.sessions))
 	for _, managed := range s.sessions {
 		snapshot := Snapshot{
-			Membership: managed.membership,
-			Status:     managed.status,
-			UpdatedAt:  managed.updatedAt,
+			Membership:  managed.membership,
+			Status:      managed.status,
+			UpdatedAt:   managed.updatedAt,
+			OverlayIPv4: managed.membership.OverlayIPv4,
+		}
+		if reporter, ok := managed.session.(AddressReporter); ok {
+			if address := reporter.OverlayAddress(); address != "" {
+				snapshot.OverlayIPv4 = address
+			}
 		}
 		if reporter, ok := managed.session.(ConnectionReporter); ok &&
 			snapshot.Status == StatusConnected && !reporter.Connected() {

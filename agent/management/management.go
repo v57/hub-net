@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/user"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -177,6 +178,22 @@ func (s *Service) Execute(ctx context.Context, request Request) Response {
 		}
 	case "list":
 		response.Items = s.daemon.List()
+		// Paused memberships have no session; list them from the store
+		if records, _, err := s.store.Load(); err == nil {
+			for _, stored := range records {
+				if stored.Record.Paused {
+					response.Items = append(response.Items, pausedItem(stored.Record))
+				}
+			}
+		}
+	case "pause", "resume":
+		if request.Alias == "" {
+			response.Error = "hub name required"
+			break
+		}
+		if err := s.setPaused(request.Command == "pause", request.Alias); err != nil {
+			response.Error = err.Error()
+		}
 	case "open", "close":
 		if request.Port == 0 || request.Alias == "" {
 			response.Error = "port and hub name required"
@@ -212,6 +229,56 @@ func toSupervisor(stored membership.Stored) supervisor.Membership {
 		GatewayAllowed:   stored.Record.GatewayAllowed,
 		Local:            stored.Record.Local,
 		OverlayIPv4:      stored.Record.CanonicalIPv4,
+		OverlayIPv6:      stored.Record.CanonicalIPv6,
+	}
+}
+
+// setPaused stops a membership's session and keeps the membership (pause), or
+// starts it again (resume). Both are idempotent.
+func (s *Service) setPaused(paused bool, alias string) error {
+	stored, found, err := s.store.FindAlias(alias)
+	if err != nil {
+		return err
+	}
+	if !found {
+		return fmt.Errorf("hub %q not found", alias)
+	}
+	if stored.Record.Paused == paused {
+		return nil
+	}
+	if paused {
+		// The session restarts with the recorded address: keep the one the
+		// Hub registered it with. A device that joined the Hub before keeps
+		// its earlier address there while its join may have recorded a new one.
+		for _, item := range s.daemon.List() {
+			if item.ID == stored.Record.ID && item.OverlayIPv4 != "" && item.OverlayIPv4 != stored.Record.CanonicalIPv4 {
+				if _, err := s.store.UpdateCanonicalIPv4(stored.Record.ID, item.OverlayIPv4); err != nil {
+					return err
+				}
+			}
+		}
+		if err := s.daemon.Remove(stored.Record.ID); err != nil {
+			return err
+		}
+		_, err = s.store.UpdatePaused(stored.Record.ID, true)
+		return err
+	}
+	stored, err = s.store.UpdatePaused(stored.Record.ID, false)
+	if err != nil {
+		return err
+	}
+	if err := s.daemon.Add(toSupervisor(stored)); err != nil {
+		_, rollbackErr := s.store.UpdatePaused(stored.Record.ID, true)
+		return errors.Join(err, rollbackErr)
+	}
+	return nil
+}
+
+func pausedItem(record membership.Record) hubnet.HubListItem {
+	return hubnet.HubListItem{
+		ID: record.ID, Alias: record.Alias, Header: record.Header, Status: supervisor.StatusPaused,
+		NodeURL: record.NodeURL, GatewayAllowed: record.GatewayAllowed,
+		OverlayIPv4: record.CanonicalIPv4, OverlayIPv6: record.CanonicalIPv6,
 	}
 }
 
@@ -355,6 +422,25 @@ func NewServer(path string, service *Service) (*Server, error) {
 		WriteTimeout:      2 * time.Minute,
 	}
 	return server, nil
+}
+
+// ShareWithGroup opens the command socket to a local group: owner and group
+// may read and write it (0660). A desktop app run by a member of the group
+// (Hub on Linux) then sends join, leave and list itself. The socket's
+// directory must let the group through.
+func (s *Server) ShareWithGroup(name string) error {
+	group, err := user.LookupGroup(name)
+	if err != nil {
+		return fmt.Errorf("management: socket group %q: %w", name, err)
+	}
+	gid, err := strconv.Atoi(group.Gid)
+	if err != nil {
+		return fmt.Errorf("management: socket group %q: %w", name, err)
+	}
+	if err := os.Chown(s.path, -1, gid); err != nil {
+		return err
+	}
+	return os.Chmod(s.path, 0o660)
 }
 
 func (s *Server) Serve(ctx context.Context) error {
@@ -516,6 +602,11 @@ func ParseCommand(args []string) (Request, error) {
 			request.Command = "vpnRemove"
 		}
 		request.Alias = args[2]
+	case "pause", "resume":
+		if len(args) != 2 {
+			return request, fmt.Errorf("usage: hub-net %s <hubname>", request.Command)
+		}
+		request.Alias = args[1]
 	case "list", "removeAll":
 		if len(args) != 1 {
 			return request, fmt.Errorf("usage: hub-net %s", request.Command)

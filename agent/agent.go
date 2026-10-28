@@ -1376,6 +1376,18 @@ func (a *Agent) Connected() bool {
 	return prof != nil && prof.Snapshot().State == profile.StateRegistered
 }
 
+// OverlayAddress reports the IPv4 overlay address the Hub assigned this
+// session, empty before it registers.
+func (a *Agent) OverlayAddress() string {
+	a.mu.Lock()
+	prof := a.profile
+	a.mu.Unlock()
+	if prof == nil {
+		return ""
+	}
+	return prof.Snapshot().OverlayAddress
+}
+
 // Shutdown signals Run to stop. Safe to call multiple times.
 func (a *Agent) Shutdown() {
 	a.mu.Lock()
