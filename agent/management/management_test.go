@@ -428,7 +428,8 @@ func TestPauseResumeKeepsTheMembershipAndListsIt(t *testing.T) {
 			t.Fatal("a paused membership keeps its session")
 		}
 		items := execute("list").Items
-		if len(items) != 1 || items[0].Status != supervisor.StatusPaused || items[0].OverlayIPv4 != "100.96.0.3" {
+		if len(items) != 1 || items[0].Status != supervisor.StatusPaused || items[0].OverlayIPv4 != "100.96.0.3" ||
+			items[0].HubAddress != "ws://hub" {
 			t.Fatalf("list while paused = %+v", items)
 		}
 	}

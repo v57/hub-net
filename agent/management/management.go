@@ -265,10 +265,12 @@ func (s *Service) setPaused(paused bool, alias string) error {
 }
 
 func pausedItem(record membership.Record) hubnet.HubListItem {
+	var address string
+	_ = json.Unmarshal(record.HubAddress, &address)
 	return hubnet.HubListItem{
 		ID: record.ID, Alias: record.Alias, Header: record.Header, Status: supervisor.StatusPaused,
 		NodeURL: record.NodeURL, GatewayAllowed: record.GatewayAllowed,
-		OverlayIPv4: record.CanonicalIPv4, OverlayIPv6: record.CanonicalIPv6,
+		OverlayIPv4: record.CanonicalIPv4, OverlayIPv6: record.CanonicalIPv6, HubAddress: address,
 	}
 }
 

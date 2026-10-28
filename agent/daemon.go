@@ -37,6 +37,17 @@ type HubListItem struct {
 	// network (canonical, before any translation).
 	OverlayIPv4 string `json:"overlayIpv4,omitempty"`
 	OverlayIPv6 string `json:"overlayIpv6,omitempty"`
+	// HubAddress is where the session reaches hub-server, as recorded when
+	// it joined (a ws:// URL), so a client can tell which of its hubs this is.
+	HubAddress string `json:"hubAddress,omitempty"`
+}
+
+// hubAddressString is a membership's hub address when it is a URL.
+func hubAddressString(address any) string {
+	if value, ok := address.(string); ok {
+		return value
+	}
+	return ""
 }
 
 func NewDaemon(options SessionOptions) (*Daemon, error) {
@@ -275,6 +286,7 @@ func (d *Daemon) List() []HubListItem {
 			GatewayAllowed: snapshot.Membership.GatewayAllowed,
 			OverlayIPv4:    snapshot.OverlayIPv4,
 			OverlayIPv6:    snapshot.OverlayIPv6,
+			HubAddress:     hubAddressString(snapshot.Membership.HubAddress),
 		})
 	}
 	return items
