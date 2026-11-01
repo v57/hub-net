@@ -37,10 +37,11 @@ type Link struct {
 
 // Verify checks everything this device can know on its own: the hub key it
 // pinned, that it is a side, the lifetime and signature, and that the routes
-// are the other side's own addresses. Only `hub` links (a member and the
-// hub's machine) are taken. What the node said counts for nothing here.
+// are the other side's own addresses. `hub` links (a member and the hub's
+// machine) and `share` links (a member and another member fronting shares it
+// may open) are taken. What the node said counts for nothing here.
 func Verify(grant models.PeerLinkGrant, trustedHubKey, ownKey string, now time.Time) (Link, error) {
-	if grant.Version != models.WireVersion || grant.GrantID == "" || grant.Purpose != models.PeerLinkPurposeHub ||
+	if grant.Version != models.WireVersion || grant.GrantID == "" || (grant.Purpose != models.PeerLinkPurposeHub && grant.Purpose != models.PeerLinkPurposeShare) ||
 		grant.A.Key == grant.B.Key || grant.A.WireGuardKey == grant.B.WireGuardKey ||
 		len(grant.A.Addresses) == 0 || len(grant.B.Addresses) == 0 {
 		return Link{}, ErrMalformed
@@ -74,7 +75,7 @@ func Verify(grant models.PeerLinkGrant, trustedHubKey, ownKey string, now time.T
 	if link.Opens {
 		routes = grant.AViaB
 	}
-	// A hub link carries the other device's own addresses and nothing more
+	// A link carries the other device's own addresses and nothing more
 	want := make(map[netip.Prefix]bool, len(link.Other.Addresses))
 	for _, address := range link.Other.Addresses {
 		parsed, err := netip.ParseAddr(address)

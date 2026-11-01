@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/netip"
 	"sync"
 	"testing"
@@ -277,4 +278,81 @@ func TestReachableFirstPutsOtherPrivateNetworksLast(t *testing.T) {
 	if ordered[0].Port != 2 || ordered[1].Port != 3 || ordered[2].Port != 1 {
 		t.Fatalf("ordered = %+v", ordered)
 	}
+}
+
+// shareGrant signs a share link from `a` to another member `b` fronting a share
+// `a` may open.
+func (h hub) shareGrant(t *testing.T, id, a, b string, aHost, bHost int) models.PeerLinkGrant {
+	t.Helper()
+	side := func(key string, host int) models.PeerLinkSide {
+		return models.PeerLinkSide{Key: key, WireGuardKey: "wg-" + key, Member: key,
+			Addresses: []string{fmt.Sprintf("100.96.1.%d", host)}}
+	}
+	return h.grant(t, func(grant *models.PeerLinkGrant) {
+		grant.GrantID = id
+		grant.Purpose = models.PeerLinkPurposeShare
+		grant.A, grant.B = side(a, aHost), side(b, bHost)
+		grant.AViaB = []string{fmt.Sprintf("100.96.1.%d/32", bHost)}
+		grant.BViaA = []string{fmt.Sprintf("100.96.1.%d/32", aHost)}
+		grant.AToB = []models.PeerLinkPort{{Protocol: "tcp", Port: 50000}}
+	})
+}
+
+// Two members fronting shares the other may open: each brings its own share
+// grant, and both stay one peer until neither names it.
+func TestShareLinksOfBothMembersAreOnePeer(t *testing.T) {
+	h := newHub(t)
+	f := &fakes{handshakes: map[string]time.Time{}, opened: make(chan struct{}, 4)}
+	manager := New("tablet", f.deps())
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go manager.Run(ctx)
+
+	manager.Update(h.key, []models.PeerLinkGrant{h.shareGrant(t, "tablet-phone", "tablet", "phone", 4, 3)})
+	incoming := h.shareGrant(t, "phone-tablet", "phone", "tablet", 3, 4)
+	manager.Handle(protocol.Envelope{Type: protocol.MessageLinkIncoming, LinkID: "l2", Grant: &incoming, ProbeToken: "t", PeerKey: "phone"})
+	eventually(t, "the accept", func() bool {
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		return len(f.sent) > 0 && f.sent[0] == "link.accept l2"
+	})
+	peers := manager.Peers()
+	if len(peers) != 1 || peers[0].Key != "phone" || len(peers[0].Routes) != 1 ||
+		peers[0].Routes[0] != netip.MustParsePrefix("100.96.1.3/32") {
+		t.Fatalf("peers = %+v", peers)
+	}
+	// The phone's own grant still names the tablet once the tablet's is gone
+	manager.Update(h.key, nil)
+	if peers := manager.Peers(); len(peers) != 1 || peers[0].Key != "phone" {
+		t.Fatalf("peers after update = %+v", peers)
+	}
+}
+
+// At most MaximumLinks linked devices: grants past it are left out, hub links
+// first, and a new device's link.incoming is rejected.
+func TestLinksStopAtTheLimit(t *testing.T) {
+	h := newHub(t)
+	f := &fakes{handshakes: map[string]time.Time{}, opened: make(chan struct{}, 4)}
+	manager := New("member", f.deps())
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go manager.Run(ctx)
+
+	var grants []models.PeerLinkGrant
+	for index := 0; index < MaximumLinks+2; index++ {
+		grants = append(grants, h.shareGrant(t, fmt.Sprintf("share-%d", index), "member", fmt.Sprintf("camera-%02d", index), 3, 10+index))
+	}
+	grants = append(grants, h.grant(t, nil))
+	manager.Update(h.key, grants)
+	peers := manager.Peers()
+	if len(peers) != MaximumLinks || peers[len(peers)-1].Key != "machine" {
+		t.Fatalf("%d peers, last %+v", len(peers), peers[len(peers)-1])
+	}
+	incoming := h.shareGrant(t, "late", "late", "member", 99, 3)
+	manager.Handle(protocol.Envelope{Type: protocol.MessageLinkIncoming, LinkID: "late", Grant: &incoming, ProbeToken: "t", PeerKey: "late"})
+	eventually(t, "the reject", func() bool {
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		return len(f.sent) > 0 && f.sent[0] == "link.reject late"
+	})
 }

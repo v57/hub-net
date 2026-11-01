@@ -72,6 +72,10 @@ const (
 	probeInterval    = time.Second
 	// The node closes a link that isn't ready within a minute
 	probeRounds = 60
+	// MaximumLinks is how many devices this one links to at once
+	// (hub-net-node's PROTOCOL.md): grants past it, hub links first, are left
+	// out and links other devices bring past it are rejected.
+	MaximumLinks = 16
 )
 
 type attempt struct {
@@ -107,9 +111,9 @@ type Manager struct {
 	peers    map[string]Peer
 	attempts map[string]*attempt
 	opening  map[string]bool
-	// delivered is the grant each linked device last took, by its key: a new
-	// grant opens the link again even while the path is live.
-	delivered map[string]string
+	// delivered are the grants whose link came up, by id: a new grant opens
+	// the link again even while the path is live.
+	delivered map[string]bool
 	present   bool
 	applied   []Peer
 }
@@ -133,7 +137,7 @@ func New(ownKey string, deps Dependencies) *Manager {
 		peers:     make(map[string]Peer),
 		attempts:  make(map[string]*attempt),
 		opening:   make(map[string]bool),
-		delivered: make(map[string]string),
+		delivered: make(map[string]bool),
 	}
 }
 
@@ -178,9 +182,23 @@ func (m *Manager) Update(trustedHubKey string, grants []models.PeerLinkGrant) {
 			}
 			verified = append(verified, link)
 		}
-		m.own = verified
+		// Hub links first, then one device after another until the limit,
+		// counting those already admitted
+		sort.SliceStable(verified, func(i, j int) bool {
+			return verified[i].Grant.Purpose == models.PeerLinkPurposeHub && verified[j].Grant.Purpose != models.PeerLinkPurposeHub
+		})
+		keys := make(map[string]bool, len(m.admitted))
+		for key := range m.admitted {
+			keys[key] = true
+		}
+		m.own = m.own[:0]
 		for _, link := range verified {
-			m.setPeer(link)
+			if !keys[link.Other.Key] && len(keys) >= MaximumLinks {
+				m.log.Warn("link grant left out", slog.String("grant", short(link.Grant.GrantID)), slog.Int("links", MaximumLinks))
+				continue
+			}
+			keys[link.Other.Key] = true
+			m.own = append(m.own, link)
 		}
 		m.removeStale()
 		m.openWhereNeeded()
@@ -264,8 +282,14 @@ func (m *Manager) incoming(envelope protocol.Envelope) {
 		go m.send(protocol.MessageLinkReject, envelope.LinkID, nil)
 		return
 	}
+	if _, linked := m.peers[envelope.PeerKey]; !linked && len(m.peers) >= MaximumLinks {
+		m.log.Warn("link.incoming rejected", slog.String("link", short(envelope.LinkID)),
+			slog.String("from", tail(envelope.PeerKey)), slog.Int("links", MaximumLinks))
+		go m.send(protocol.MessageLinkReject, envelope.LinkID, nil)
+		return
+	}
 	m.admitted[envelope.PeerKey] = link
-	m.setPeer(link)
+	m.setPeer(link.Other.Key)
 	m.apply(false)
 	m.log.Info("link.incoming accepted", slog.String("link", short(envelope.LinkID)), slog.String("from", tail(envelope.PeerKey)))
 	if err := m.deps.Send(protocol.MessageLinkAccept, envelope.LinkID, nil); err != nil {
@@ -310,7 +334,7 @@ func (m *Manager) ready(envelope protocol.Envelope) {
 	if peer, ok := m.peers[link.Other.Key]; ok && peer.Endpoint != "" && m.isLive(link) {
 		for _, endpoint := range ordered {
 			if endpointString(endpoint) == peer.Endpoint {
-				m.delivered[link.Other.Key] = link.Grant.GrantID
+				m.delivered[link.Grant.GrantID] = true
 				m.log.Info("link renewed", slog.String("link", short(linkID)), slog.String("peer", tail(link.Other.Key)), slog.String("at", peer.Endpoint))
 				m.finish(linkID)
 				return
@@ -353,7 +377,7 @@ func (m *Manager) punch(ctx context.Context, linkID string, link Link, endpoints
 		for m.now().Before(trialEnd) {
 			if last, ok := m.deps.LastHandshake(link.Other.WireGuardKey); ok && !last.Before(started.Add(-time.Second)) {
 				m.post(func() {
-					m.delivered[link.Other.Key] = link.Grant.GrantID
+					m.delivered[link.Grant.GrantID] = true
 					m.log.Info("link up", slog.String("link", short(linkID)), slog.String("peer", tail(link.Other.Key)), slog.String("at", endpoint))
 					m.finish(linkID)
 				})
@@ -385,7 +409,7 @@ func (m *Manager) openWhereNeeded() {
 				break
 			}
 		}
-		if busy || (m.delivered[link.Other.Key] == link.Grant.GrantID && m.isLive(link)) {
+		if busy || (m.delivered[link.Grant.GrantID] && m.isLive(link)) {
 			continue
 		}
 		m.opening[link.Grant.GrantID] = true
@@ -468,16 +492,49 @@ func (m *Manager) stopAll() {
 	}
 }
 
-func (m *Manager) setPeer(link Link) {
-	current, ok := m.peers[link.Other.Key]
+// setPeer sets the peer of a linked device from every grant naming it: two
+// members that both front shares the other may open each bring a `share`
+// grant. The newest grant's WireGuard key counts (the device joined again
+// with new keys).
+func (m *Manager) setPeer(key string) {
+	var links []Link
+	for _, link := range m.own {
+		if link.Other.Key == key {
+			links = append(links, link)
+		}
+	}
+	if link, ok := m.admitted[key]; ok {
+		links = append(links, link)
+	}
+	if len(links) == 0 {
+		delete(m.peers, key)
+		return
+	}
+	newest := links[0]
+	for _, link := range links[1:] {
+		if link.ExpiresAt.After(newest.ExpiresAt) {
+			newest = link
+		}
+	}
+	var routes []netip.Prefix
+	seen := make(map[netip.Prefix]bool)
+	for _, link := range links {
+		if link.Other.WireGuardKey != newest.Other.WireGuardKey {
+			continue
+		}
+		for _, route := range link.Routes {
+			if !seen[route] {
+				seen[route] = true
+				routes = append(routes, route)
+			}
+		}
+	}
+	current, ok := m.peers[key]
 	endpoint := ""
-	if ok && current.WireGuardKey == link.Other.WireGuardKey {
+	if ok && current.WireGuardKey == newest.Other.WireGuardKey {
 		endpoint = current.Endpoint
 	}
-	m.peers[link.Other.Key] = Peer{
-		Key: link.Other.Key, WireGuardKey: link.Other.WireGuardKey,
-		Routes: append([]netip.Prefix(nil), link.Routes...), Endpoint: endpoint,
-	}
+	m.peers[key] = Peer{Key: key, WireGuardKey: newest.Other.WireGuardKey, Routes: routes, Endpoint: endpoint}
 }
 
 func (m *Manager) removeStale() {
@@ -500,9 +557,16 @@ func (m *Manager) removeStale() {
 			delete(m.admitted, key)
 		}
 	}
-	for key := range m.delivered {
-		if !keep[key] {
-			delete(m.delivered, key)
+	grants := make(map[string]bool)
+	for _, link := range m.own {
+		grants[link.Grant.GrantID] = true
+	}
+	for _, link := range m.admitted {
+		grants[link.Grant.GrantID] = true
+	}
+	for id := range m.delivered {
+		if !grants[id] {
+			delete(m.delivered, id)
 		}
 	}
 	removed := false
@@ -511,6 +575,9 @@ func (m *Manager) removeStale() {
 			delete(m.peers, key)
 			removed = true
 		}
+	}
+	for key := range keep {
+		m.setPeer(key)
 	}
 	m.apply(removed)
 }
