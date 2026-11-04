@@ -1,11 +1,13 @@
 package nodeclient
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"net"
 	"net/netip"
+	"slices"
 	"time"
 
 	hubprotocol "github.com/v57/hub-net-node/models"
@@ -33,6 +35,55 @@ type LinkError struct {
 
 func (e *LinkError) Error() string { return fmt.Sprintf("nodeclient: link: %s %s", e.Code, e.Message) }
 
+// SetPresenceSecret takes the secret this device shares with its Hub: the node then gives no answer about this device
+// to anyone without it, and this device can reach others who hold it. Nil goes back to answering everyone. The client
+// sends tags and proofs only to a node that said it takes them.
+func (c *Client) SetPresenceSecret(secret []byte) error {
+	c.mu.Lock()
+	c.presenceSecret = bytes.Clone(secret)
+	conn, online := c.conn, c.online
+	c.mu.Unlock()
+	if !online || conn == nil {
+		return nil
+	}
+	return c.syncPresenceTags(conn)
+}
+
+func (c *Client) presenceTagsLocked() []string {
+	if len(c.presenceSecret) == 0 || c.nodeMinor < 1 {
+		return nil
+	}
+	return []string{protocol.PresenceTag(protocol.PresenceProof(c.presenceSecret, c.key))}
+}
+
+func (c *Client) presenceProofLocked(target string) string {
+	if len(c.presenceSecret) == 0 || c.nodeMinor < 1 {
+		return ""
+	}
+	return protocol.PresenceProof(c.presenceSecret, target)
+}
+
+// syncPresenceTags tells the node when this device's tags changed since it last told it.
+func (c *Client) syncPresenceTags(conn net.Conn) error {
+	c.mu.Lock()
+	tags := c.presenceTagsLocked()
+	same := slices.Equal(tags, c.sentTags)
+	if !same {
+		c.sentTags = tags
+	}
+	c.mu.Unlock()
+	if same {
+		return nil
+	}
+	if err := c.write(conn, protocol.Envelope{
+		MajorVersion: protocol.MajorVersion, MinorVersion: protocol.MinorVersion,
+		Type: protocol.MessagePresenceTags, PresenceTags: tags,
+	}); err != nil {
+		return fmt.Errorf("nodeclient: presence.tags: %w", err)
+	}
+	return nil
+}
+
 // OpenLink sends link.open with grant on the presence connection and waits
 // for link.opened.
 func (c *Client) OpenLink(ctx context.Context, grant hubprotocol.PeerLinkGrant) (LinkOpened, error) {
@@ -49,11 +100,16 @@ func (c *Client) OpenLink(ctx context.Context, grant hubprotocol.PeerLinkGrant) 
 	}
 	c.waiters[requestID] = answer
 	c.opening = append(c.opening, requestID)
+	target := grant.A.Key
+	if target == c.key {
+		target = grant.B.Key
+	}
+	proof := c.presenceProofLocked(target)
 	c.mu.Unlock()
 	defer c.forget(requestID)
 	if err := c.write(conn, protocol.Envelope{
 		MajorVersion: protocol.MajorVersion, MinorVersion: protocol.MinorVersion,
-		Type: protocol.MessageLinkOpen, RequestID: requestID, Grant: &grant,
+		Type: protocol.MessageLinkOpen, RequestID: requestID, Grant: &grant, PresenceProof: proof,
 	}); err != nil {
 		return LinkOpened{}, fmt.Errorf("nodeclient: link.open: %w", err)
 	}

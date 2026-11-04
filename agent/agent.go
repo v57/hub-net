@@ -625,6 +625,7 @@ func (a *Agent) Run(ctx context.Context) (err error) {
 		a.logger.Warn("node registration client unavailable", slog.String("err", err.Error()))
 	} else {
 		a.nodeClient = nodeClient
+		_ = nodeClient.SetPresenceSecret(a.loadPresenceSecret())
 	}
 	wgPublicKey, err := wireGuardPublicKey(a.wgPrivate)
 	if err != nil {

@@ -154,6 +154,11 @@ type Client struct {
 	// opening keeps their order.
 	waiters map[string]chan protocol.Envelope
 	opening []string
+	// presenceSecret is what this device and its Hub share. nodeMinor is what this connection's node stated;
+	// sentTags are the tags it last got.
+	presenceSecret []byte
+	nodeMinor      int
+	sentTags       []string
 }
 
 // New validates options and constructs a Client.
@@ -317,6 +322,10 @@ func (c *Client) connectAndRegister(ctx context.Context, endpoint string) error 
 		return err
 	}
 	c.setOnline(true)
+	// The Hub may have given a new secret while this registration was on its way
+	if err := c.syncPresenceTags(conn); err != nil {
+		return err
+	}
 	c.log.Info("node registration live",
 		slog.String("endpoint", endpoint),
 		slog.Time("expiresAt", expiresAt))
@@ -631,6 +640,9 @@ func (c *Client) register(ctx context.Context, conn net.Conn) (time.Time, error)
 			return time.Time{}, fmt.Errorf("nodeclient: unexpected reply %q", reply.Type)
 		}
 		nonce = reply.ChallengeNonce
+		c.mu.Lock()
+		c.nodeMinor = reply.MinorVersion
+		c.mu.Unlock()
 		break
 	}
 
@@ -644,6 +656,10 @@ func (c *Client) register(ctx context.Context, conn net.Conn) (time.Time, error)
 	}
 
 	answerRequestID := newRequestID()
+	c.mu.Lock()
+	tags := c.presenceTagsLocked()
+	c.sentTags = tags
+	c.mu.Unlock()
 	if err := c.write(conn, protocol.Envelope{
 		MajorVersion:       protocol.MajorVersion,
 		MinorVersion:       protocol.MinorVersion,
@@ -652,6 +668,7 @@ func (c *Client) register(ctx context.Context, conn net.Conn) (time.Time, error)
 		ServiceKey:         c.key,
 		ChallengeNonce:     nonce,
 		ChallengeSignature: signature,
+		PresenceTags:       tags,
 	}); err != nil {
 		return time.Time{}, fmt.Errorf("nodeclient: answer challenge: %w", err)
 	}

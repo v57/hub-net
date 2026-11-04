@@ -1,18 +1,23 @@
 package hubnet
 
 import (
+	"bytes"
 	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/x509"
 	"encoding/base64"
+	"errors"
+	"io"
 	"log/slog"
 	"net/netip"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/v57/hub-net-node/models"
 
+	"github.com/v57/hub-net/config"
 	"github.com/v57/hub-net/deviceports"
 	"github.com/v57/hub-net/enforcement"
 	"github.com/v57/hub-net/peerlink"
@@ -149,5 +154,27 @@ func TestAConnectionGrantForAPortOffTheListIsRefused(t *testing.T) {
 	}
 	if backend.Allowed("tcp", operatorAddress, deviceAddress, 22, time.Now()) {
 		t.Fatal("the grant opened the port")
+	}
+}
+
+func TestThePresenceSecretStaysInAFileOnlyTheOwnerReads(t *testing.T) {
+	a := &Agent{config: config.Config{StateDir: t.TempDir()}, logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	secret := bytes.Repeat([]byte{5}, 32)
+	a.setPresenceSecret(base64.StdEncoding.EncodeToString(secret))
+	if !bytes.Equal(a.loadPresenceSecret(), secret) {
+		t.Fatal("not read back")
+	}
+	info, err := os.Stat(a.presenceSecretPath())
+	if err != nil || info.Mode().Perm() != 0o600 {
+		t.Fatalf("mode = %v, %v", info, err)
+	}
+	// A Hub with no secret: the device goes back to answering everyone, and the file goes
+	a.setPresenceSecret("")
+	if _, err := os.Stat(a.presenceSecretPath()); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("still there: %v", err)
+	}
+	a.setPresenceSecret("not base64!")
+	if a.loadPresenceSecret() != nil {
+		t.Fatal("kept an unreadable secret")
 	}
 }

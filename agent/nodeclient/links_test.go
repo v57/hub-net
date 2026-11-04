@@ -1,6 +1,7 @@
 package nodeclient
 
 import (
+	"bytes"
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
@@ -11,6 +12,7 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"os"
 	"testing"
 	"time"
 
@@ -164,5 +166,95 @@ func TestOpenLinkToAnAbsentDeviceFailsWithoutDroppingPresence(t *testing.T) {
 	time.Sleep(200 * time.Millisecond)
 	if !member.client.Online() {
 		t.Fatal("presence dropped after a refused open")
+	}
+}
+
+func TestThePresenceSecretHidesADeviceFromAnyoneWithoutIt(t *testing.T) {
+	address, cleanup := runNodeServer(t)
+	defer cleanup()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	secret := bytes.Repeat([]byte{9}, 32)
+	target, member, stranger := startLinkDevice(t, ctx, address), startLinkDevice(t, ctx, address), startLinkDevice(t, ctx, address)
+	for _, device := range []linkDevice{target, member} {
+		if err := device.client.SetPresenceSecret(secret); err != nil {
+			t.Fatal(err)
+		}
+	}
+	time.Sleep(100 * time.Millisecond)
+
+	var linkErr *LinkError
+	_, err := stranger.client.OpenLink(ctx, hubGrant(t, stranger.key, target.key))
+	if !errors.As(err, &linkErr) || linkErr.Code != "peer_offline" {
+		t.Fatalf("no secret = %v, want peer_offline", err)
+	}
+	select {
+	case push := <-target.pushes:
+		t.Fatalf("the target heard from someone without the secret: %+v", push)
+	case <-time.After(150 * time.Millisecond):
+	}
+	if _, err := member.client.OpenLink(ctx, hubGrant(t, member.key, target.key)); err != nil {
+		t.Fatalf("with the secret = %v", err)
+	}
+
+	// Taken back, the device answers everyone again
+	if err := target.client.SetPresenceSecret(nil); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(100 * time.Millisecond)
+	if _, err := stranger.client.OpenLink(ctx, hubGrant(t, stranger.key, target.key)); err != nil {
+		t.Fatalf("no tags = %v", err)
+	}
+}
+
+// A device that holds the secret before it connects registers with its tags.
+func TestASecretHeldBeforeConnectingRegistersWithTags(t *testing.T) {
+	address, cleanup := runNodeServer(t)
+	defer cleanup()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	id, err := identity.Generate()
+	if err != nil {
+		t.Fatal(err)
+	}
+	client, err := New(Options{Endpoint: func() string { return address }, Identity: id, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := client.SetPresenceSecret(bytes.Repeat([]byte{9}, 32)); err != nil {
+		t.Fatal(err)
+	}
+	go func() { _ = client.Run(ctx) }()
+	waitOnline(t, client)
+	stranger := startLinkDevice(t, ctx, address)
+	var linkErr *LinkError
+	_, err = stranger.client.OpenLink(ctx, hubGrant(t, stranger.key, serviceKey(t, id)))
+	if !errors.As(err, &linkErr) || linkErr.Code != "peer_offline" {
+		t.Fatalf("no secret = %v, want peer_offline", err)
+	}
+}
+
+// Runs against a hub-net-node built from before presence secrets, at HUB_NET_OLD_NODE: such a node refuses unknown
+// fields, so this passes only if a device holding a secret sends it none.
+func TestAnOlderNodeGetsNoNewFields(t *testing.T) {
+	address := os.Getenv("HUB_NET_OLD_NODE")
+	if address == "" {
+		t.Skip("HUB_NET_OLD_NODE not set")
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	secret := bytes.Repeat([]byte{9}, 32)
+	target, member := startLinkDevice(t, ctx, address), startLinkDevice(t, ctx, address)
+	for _, device := range []linkDevice{target, member} {
+		if err := device.client.SetPresenceSecret(secret); err != nil {
+			t.Fatal(err)
+		}
+	}
+	time.Sleep(100 * time.Millisecond)
+	if _, err := member.client.OpenLink(ctx, hubGrant(t, member.key, target.key)); err != nil {
+		t.Fatalf("through an older node = %v", err)
+	}
+	if !member.client.Online() || !target.client.Online() {
+		t.Fatal("an older node dropped a device")
 	}
 }

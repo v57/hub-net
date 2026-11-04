@@ -1,6 +1,7 @@
 package hubnet
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -8,6 +9,8 @@ import (
 	"log/slog"
 	"net"
 	"net/netip"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -33,6 +36,8 @@ type peerLinksState struct {
 	Coordinator  string                 `json:"coordinator"`
 	HubHost      bool                   `json:"hubHost"`
 	Grants       []models.PeerLinkGrant `json:"grants"`
+	// PresenceSecret is what this device and its Hub share, so the node says nothing about either to anyone else.
+	PresenceSecret string `json:"presenceSecret,omitempty"`
 }
 
 // newLinkManager builds this session's peer link manager. It reaches the
@@ -97,8 +102,81 @@ func (a *Agent) watchLinks(ctx context.Context, sender *channelgo.Sender) {
 		if json.Unmarshal(encoded, &state) != nil {
 			continue
 		}
+		a.setPresenceSecret(state.PresenceSecret)
 		a.links.Update(a.profile.HubKey(), state.Grants)
 	}
+}
+
+// PresenceSecretFile keeps the Hub's secret in the daemon's state directory, so a restart registers with its tags
+// from the first message, also while the Hub is out of reach.
+const PresenceSecretFile = "presence-secret"
+
+func (a *Agent) presenceSecretPath() string {
+	return filepath.Join(a.config.StateDir, PresenceSecretFile)
+}
+
+// loadPresenceSecret is what the last run's Hub gave. A file that's gone or unreadable just means no tags yet.
+func (a *Agent) loadPresenceSecret() []byte {
+	raw, err := os.ReadFile(a.presenceSecretPath())
+	if err != nil {
+		return nil
+	}
+	secret, err := base64.StdEncoding.DecodeString(strings.TrimSpace(string(raw)))
+	if err != nil {
+		return nil
+	}
+	return secret
+}
+
+// setPresenceSecret follows network/links. A Hub that gives none (an older Hub) has members who can't hold one
+// either, so the device goes back to answering everyone rather than vanish from them.
+func (a *Agent) setPresenceSecret(encoded string) {
+	secret, err := base64.StdEncoding.DecodeString(encoded)
+	if err != nil {
+		a.logger.Warn("network/links: unreadable presence secret")
+		return
+	}
+	if bytes.Equal(secret, a.loadPresenceSecret()) {
+		if a.nodeClient != nil {
+			_ = a.nodeClient.SetPresenceSecret(secret)
+		}
+		return
+	}
+	path := a.presenceSecretPath()
+	if len(secret) == 0 {
+		err = os.Remove(path)
+		if errors.Is(err, os.ErrNotExist) {
+			err = nil
+		}
+	} else if err = os.MkdirAll(filepath.Dir(path), 0o700); err == nil {
+		err = writeSecretFile(path, encoded)
+	}
+	if err != nil {
+		a.logger.Warn("presence secret not kept", slog.String("err", err.Error()))
+	}
+	if a.nodeClient != nil {
+		if err := a.nodeClient.SetPresenceSecret(secret); err != nil {
+			a.logger.Info("presence tags not sent", slog.String("err", err.Error()))
+		}
+	}
+}
+
+func writeSecretFile(path, value string) error {
+	temp, err := os.CreateTemp(filepath.Dir(path), ".presence-secret-")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(temp.Name())
+	if err = temp.Chmod(0o600); err == nil {
+		_, err = temp.WriteString(value)
+	}
+	if closeErr := temp.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		return err
+	}
+	return os.Rename(temp.Name(), path)
 }
 
 func (a *Agent) listenPort() uint16 {
