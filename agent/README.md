@@ -32,6 +32,20 @@ APIs, and end-to-end tests.
 
 See `../PLATFORMS.md` for the platform matrix.
 
+
+## What a Hub can open on this device
+
+A hub-signed grant names ports (`aToB`, `bToA`, connection grants); the device opens only those also on its own
+list, `device-ports.json` in the state directory, one per device across its Hubs (`deviceports`). So a Hub can narrow
+what's reachable, never widen it. On the list are the shares this device publishes (`hub-net open`), the ports local
+services had attested here (31 days from the last attestation), ports the user allowed (`hub-net ports allow tcp/8080`),
+the Hub's port on the Hub's own machine, and the SSH port only after `hub-net ports ssh on [port]`. `hub-net ports`
+edits the file directly, so nothing reaches it over the network; a running agent takes the change within seconds and
+ends the flows of a port that left.
+
+The first link installs the Linux firewall, also on a member, where nothing limited a linked device before. Other
+platforms have no firewall backend, so there a link isn't limited to these ports; the agent logs a warning.
+
 ## Layout
 
 ```

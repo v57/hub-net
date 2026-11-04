@@ -123,11 +123,15 @@ func (a *Agent) applyLinkPeers(peers []peerlink.Peer) error {
 		existing[base64.StdEncoding.EncodeToString(peer.PublicKey)] = peer
 	}
 	machine := a.bindingKind == "" || a.bindingKind == models.LocalAgentBindingMachine
-	var result error
+	accepted := make([]peerlink.Peer, 0, len(peers))
 	for _, peer := range peers {
-		if a.isRevokedPeer(peer.Key, peer.WireGuardKey) || (machine && !a.netUsers.Exists(peer.Key)) {
-			continue
+		if !a.isRevokedPeer(peer.Key, peer.WireGuardKey) && (!machine || a.netUsers.Exists(peer.Key)) {
+			accepted = append(accepted, peer)
 		}
+	}
+	// The ports before the peers, so a new peer never finds this device open
+	result := a.applyLinkPorts(accepted)
+	for _, peer := range accepted {
 		key, err := base64.StdEncoding.DecodeString(peer.WireGuardKey)
 		if err != nil || len(key) != 32 {
 			continue

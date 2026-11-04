@@ -28,6 +28,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/v57/channel-go/channelgo"
@@ -37,6 +38,7 @@ import (
 	"github.com/v57/hub-net/config"
 	"github.com/v57/hub-net/connection"
 	"github.com/v57/hub-net/control"
+	"github.com/v57/hub-net/deviceports"
 	"github.com/v57/hub-net/dnsresolver"
 	"github.com/v57/hub-net/enforcement"
 	"github.com/v57/hub-net/gateway"
@@ -91,6 +93,10 @@ type Agent struct {
 	connections        *connection.Manager
 	grantVerifier      *grant.Verifier
 	enforcementMgr     *enforcement.Manager
+	devicePorts        *deviceports.List
+	devicePortsPath    string
+	linkedPeers        []peerlink.Peer
+	warnedNoFirewall   atomic.Bool
 	enforcementBackend enforcement.Backend
 	production         bool
 	bindingKind        protocol.LocalAgentBindingKind
@@ -192,6 +198,9 @@ type Options struct {
 	// InitialShares are persisted daemon-owned publications declared before
 	// Start so connection and reconnect publish the complete desired set.
 	InitialShares []publications.Entry
+	// DevicePortsPath is the device's own port list, shared by its Hubs. Empty
+	// keeps it in this session's state directory.
+	DevicePortsPath string
 	// GatewayAllowed restores explicit per-Hub gateway serving intent.
 	// False is always the default for new and migrated memberships.
 	GatewayAllowed bool
@@ -281,6 +290,7 @@ func New(options Options) (*Agent, error) {
 		onConnect:          options.OnConnect,
 		activateNetwork:    options.ActivateNetwork,
 		initialShares:      append([]publications.Entry(nil), options.InitialShares...),
+		devicePortsPath:    options.DevicePortsPath,
 		gatewayBackend:     gatewayBackend,
 		gatewayAllowed:     options.GatewayAllowed,
 		enforcementBackend: enforcementBackend,
@@ -368,6 +378,9 @@ func (a *Agent) Prepare(ctx context.Context) error {
 	a.profile = prof
 	a.mu.Unlock()
 
+	if err := a.openDevicePorts(); err != nil {
+		return fmt.Errorf("hubnet: open device ports: %w", err)
+	}
 	if err := a.prepareEnforcement(); err != nil {
 		// On non-Linux platforms without an injected backend the platform
 		// constructor returns ErrPlatformUnsupported. The agent still runs,
@@ -400,6 +413,11 @@ func (a *Agent) Prepare(ctx context.Context) error {
 		Agent:          a.profileID,
 		Policy:         ipc.DefaultTargetPolicy(),
 		AttestationTTL: a.config.AttestationTTL,
+		OnAttested: func(networkProtocol string, port uint16) {
+			if err := a.devicePorts.NoteAttested(deviceports.Port{Protocol: networkProtocol, Port: port}); err != nil {
+				a.logger.Warn("attested port not recorded", slog.String("err", err.Error()))
+			}
+		},
 	})
 	if err != nil {
 		return fmt.Errorf("hubnet: build ipc handler: %w", err)
@@ -490,6 +508,7 @@ func (a *Agent) Run(ctx context.Context) (err error) {
 				// A recreated interface lost the linked peers
 				a.links.Reapply()
 				go a.watchLinks(runCtx, sender)
+				go a.watchDevicePorts(runCtx)
 			}
 			if a.activateNetwork != nil {
 				if err := a.activateNetwork(); err != nil {
@@ -1739,6 +1758,9 @@ func (a *Agent) AuthorizeFlow(grantValue protocol.ConnectionGrant) error {
 	}
 	if a.isRevokedPeer(grantValue.CallerKey, grantValue.CallerWireGuardKey) {
 		return errRevokedPeer
+	}
+	if !a.devicePorts.Allows(deviceports.Port{Protocol: grantValue.Protocol, Port: grantValue.DestinationPort}, a.sharePorts()) {
+		return errPortNotAllowed
 	}
 	if source, err := netip.ParseAddr(grantValue.CallerAddress); err == nil {
 		a.mu.Lock()

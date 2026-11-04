@@ -1,11 +1,13 @@
 package peerlink
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"io"
 	"log/slog"
 	"net/netip"
+	"slices"
 	"sort"
 	"time"
 
@@ -21,11 +23,15 @@ type Peer struct {
 	Routes []netip.Prefix
 	// Endpoint is the address being tried or found, empty until link.ready.
 	Endpoint string
+	// Sources are the other side's own addresses.
+	Sources []netip.Addr
+	// Ports are what the grants let the other side open on this device.
+	Ports []models.PeerLinkPort
 }
 
 func (p Peer) equal(other Peer) bool {
 	if p.Key != other.Key || p.WireGuardKey != other.WireGuardKey || p.Endpoint != other.Endpoint ||
-		len(p.Routes) != len(other.Routes) {
+		len(p.Routes) != len(other.Routes) || !slices.Equal(p.Sources, other.Sources) || !slices.Equal(p.Ports, other.Ports) {
 		return false
 	}
 	for index := range p.Routes {
@@ -517,6 +523,8 @@ func (m *Manager) setPeer(key string) {
 		}
 	}
 	var routes []netip.Prefix
+	var sources []netip.Addr
+	var ports []models.PeerLinkPort
 	seen := make(map[netip.Prefix]bool)
 	for _, link := range links {
 		if link.Other.WireGuardKey != newest.Other.WireGuardKey {
@@ -526,15 +534,27 @@ func (m *Manager) setPeer(key string) {
 			if !seen[route] {
 				seen[route] = true
 				routes = append(routes, route)
+				sources = append(sources, route.Addr())
+			}
+		}
+		for _, port := range link.Exposed {
+			if !slices.Contains(ports, port) {
+				ports = append(ports, port)
 			}
 		}
 	}
+	slices.SortFunc(ports, func(a, b models.PeerLinkPort) int {
+		if a.Port != b.Port {
+			return cmp.Compare(a.Port, b.Port)
+		}
+		return cmp.Compare(a.Protocol, b.Protocol)
+	})
 	current, ok := m.peers[key]
 	endpoint := ""
 	if ok && current.WireGuardKey == newest.Other.WireGuardKey {
 		endpoint = current.Endpoint
 	}
-	m.peers[key] = Peer{Key: key, WireGuardKey: newest.Other.WireGuardKey, Routes: routes, Endpoint: endpoint}
+	m.peers[key] = Peer{Key: key, WireGuardKey: newest.Other.WireGuardKey, Routes: routes, Endpoint: endpoint, Sources: sources, Ports: ports}
 }
 
 func (m *Manager) removeStale() {

@@ -20,6 +20,7 @@ import (
 	"github.com/v57/hub-net-node/identity"
 	protocol "github.com/v57/hub-net-node/models"
 	"github.com/v57/hub-net/config"
+	"github.com/v57/hub-net/deviceports"
 	"github.com/v57/hub-net/hubalias"
 	"github.com/v57/hub-net/hubconn"
 	"github.com/v57/hub-net/invitation"
@@ -62,6 +63,16 @@ func run(args []string) error {
 	}
 	if *socketPath == "" {
 		*socketPath = filepath.Join(*stateDir, "command.sock")
+	}
+	devicePortsPath := filepath.Join(*stateDir, hubnet.DevicePortsFile)
+	if flags.NArg() > 0 && flags.Arg(0) == "ports" {
+		// The device's own list, edited here so no Hub or remote caller can
+		// reach it; a running agent picks it up within seconds
+		output, err := deviceports.Command(devicePortsPath, flags.Args()[1:])
+		if output != "" {
+			fmt.Println(output)
+		}
+		return err
 	}
 	if flags.NArg() > 0 {
 		request, err := management.ParseCommand(flags.Args())
@@ -127,9 +138,10 @@ func run(args []string) error {
 		}
 		return hubnet.Options{
 			Config: sessionConfig, Logger: logger, Production: true,
-			BindingKind:    bindingKind,
-			OverlayAddress: member.OverlayIPv4,
-			OverlayIPv6:    member.OverlayIPv6,
+			DevicePortsPath: devicePortsPath,
+			BindingKind:     bindingKind,
+			OverlayAddress:  member.OverlayIPv4,
+			OverlayIPv6:     member.OverlayIPv6,
 			// A restart brings the interface up with the recorded addresses
 			// before it reaches the Hub: record the ones it registered.
 			OnRegistered: func(ipv4, ipv6 string) {

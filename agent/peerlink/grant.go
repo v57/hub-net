@@ -31,7 +31,10 @@ type Link struct {
 	// Opens is true when this device is `a`, the side that opens the link.
 	Opens bool
 	// Routes are what this device sends through the other side.
-	Routes    []netip.Prefix
+	Routes []netip.Prefix
+	// Exposed are the ports the grant lets the other side open on this device.
+	// The agent opens only those also on the device's own list (deviceports).
+	Exposed   []models.PeerLinkPort
 	ExpiresAt time.Time
 }
 
@@ -72,8 +75,10 @@ func Verify(grant models.PeerLinkGrant, trustedHubKey, ownKey string, now time.T
 	}
 	link.ExpiresAt = expiresAt
 	routes := grant.BViaA
+	link.Exposed = grant.AToB
 	if link.Opens {
 		routes = grant.AViaB
+		link.Exposed = grant.BToA
 	}
 	// A link carries the other device's own addresses and nothing more
 	want := make(map[netip.Prefix]bool, len(link.Other.Addresses))

@@ -356,3 +356,26 @@ func TestLinksStopAtTheLimit(t *testing.T) {
 		return len(f.sent) > 0 && f.sent[0] == "link.reject late"
 	})
 }
+
+func TestVerifyNamesWhatTheOtherSideMayOpen(t *testing.T) {
+	h := newHub(t)
+	now := time.Now()
+	grant := h.grant(t, func(grant *models.PeerLinkGrant) {
+		grant.AToB = []models.PeerLinkPort{{Protocol: "tcp", Port: 22}}
+		grant.BToA = []models.PeerLinkPort{{Protocol: "udp", Port: 5000}}
+	})
+	machine, err := Verify(grant, h.key, "machine", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(machine.Exposed) != 1 || machine.Exposed[0].Port != 22 {
+		t.Fatalf("the target's exposed ports = %+v", machine.Exposed)
+	}
+	member, err := Verify(grant, h.key, "member", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(member.Exposed) != 1 || member.Exposed[0].Port != 5000 {
+		t.Fatalf("the opener's exposed ports = %+v", member.Exposed)
+	}
+}

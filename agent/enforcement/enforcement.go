@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/netip"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -49,6 +50,57 @@ func (m *Manager) AllowControl(destinationAddresses []string, port uint16) error
 	return nil
 }
 
+// LinkResourcePrefix names the rules of one linked device.
+const LinkResourcePrefix = "link:"
+
+// SetLinkRules replaces the rules of every peer link: what linked devices may
+// open here. Flows of a port or device that left are terminated. A first call
+// installs the firewall, so every other overlay port drops from then on.
+func (m *Manager) SetLinkRules(rules []Rule) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	previous := cloneRules(m.rules)
+	next := make(map[string]Rule, len(rules))
+	for _, rule := range rules {
+		if !strings.HasPrefix(rule.ResourceID, LinkResourcePrefix) {
+			return ErrInvalidAuthorization
+		}
+		next[ruleKey(rule)] = rule
+	}
+	gone := map[string]struct{}{}
+	changed := false
+	for key, rule := range m.rules {
+		if !strings.HasPrefix(rule.ResourceID, LinkResourcePrefix) {
+			continue
+		}
+		if _, kept := next[key]; !kept {
+			gone[rule.ResourceID] = struct{}{}
+			delete(m.rules, key)
+			changed = true
+		}
+	}
+	for key, rule := range next {
+		if _, known := m.rules[key]; !known {
+			m.rules[key] = rule
+			changed = true
+		}
+	}
+	if !changed && (len(rules) == 0 || m.linksInstalled) {
+		return nil
+	}
+	if err := m.applyLocked(); err != nil {
+		m.rules = previous
+		return fmt.Errorf("enforcement: install link rules: %w", err)
+	}
+	m.linksInstalled = true
+	for resourceID := range gone {
+		if err := m.backend.TerminateResource(resourceID); err != nil {
+			return fmt.Errorf("enforcement: terminate flows: %w", err)
+		}
+	}
+	return nil
+}
+
 var ErrInvalidAuthorization = errors.New("enforcement: invalid authorization")
 var ErrPlatformUnsupported = errors.New("enforcement: platform backend unsupported")
 
@@ -87,6 +139,8 @@ type Manager struct {
 	backend Backend
 	now     func() time.Time
 	rules   map[string]Rule
+	// linksInstalled is true once SetLinkRules applied the firewall.
+	linksInstalled bool
 }
 
 func New(backend Backend) (*Manager, error) {

@@ -108,6 +108,7 @@ type AttestHandler struct {
 	pending   map[string]pendingChallenge
 	now       func() time.Time
 	attestTTL time.Duration
+	onAttest  func(protocol string, port uint16)
 }
 
 // AttestHandlerOptions configures an AttestHandler.
@@ -116,6 +117,8 @@ type AttestHandlerOptions struct {
 	Policy         LocalTargetPolicy
 	AttestationTTL time.Duration
 	Now            func() time.Time
+	// OnAttested hears each port attested, for the device's own port list.
+	OnAttested func(protocol string, port uint16)
 }
 
 // NewAttestHandler constructs a handler. Agent identity is required because
@@ -148,6 +151,7 @@ func NewAttestHandler(options AttestHandlerOptions) (*AttestHandler, error) {
 		pending:   make(map[string]pendingChallenge),
 		now:       now,
 		attestTTL: ttl,
+		onAttest:  options.OnAttested,
 	}, nil
 }
 
@@ -292,6 +296,9 @@ func (h *AttestHandler) Attest(req AttestRequest) (AttestResponse, error) {
 		return AttestResponse{}, fmt.Errorf("ipc: sign attestation: %w", err)
 	}
 	attestation.Signature = signature
+	if h.onAttest != nil {
+		h.onAttest(req.Protocol, req.Target.Port)
+	}
 	return AttestResponse{
 		Version:     protocol.WireVersion,
 		Type:        MessageAttestResponse,
