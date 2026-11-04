@@ -58,6 +58,7 @@ type TestHub struct {
 	hubPublic  ed25519.PublicKey
 	hubPrivate ed25519.PrivateKey
 	hubKey     string
+	challenges map[string]bool
 	srv        *server.Server
 	ch         *channelgo.Channel
 
@@ -168,7 +169,7 @@ func (h *TestHub) serverOptions() server.Options {
 			}
 			state := map[string]any{}
 			version := headers["v"]
-			if version == "1" && !verifyHubToken(token, h.hubKey) {
+			if version == "1" && !h.verifyHubToken(token) {
 				h.recordConnect(Connect{Version: version})
 				return state // a refused token: anonymous
 			}
@@ -207,10 +208,25 @@ func (h *TestHub) MemberKey(serviceKey string) string {
 	return h.members[serviceKey]
 }
 
-// verifyHubToken checks a v1 token's signature over hub1:<hubKey>:<expiry>.
-func verifyHubToken(token, hubKey string) bool {
+// newChallenge is a one-time nonce for hub/info's answer.
+func (h *TestHub) newChallenge() string {
+	bytes := make([]byte, 16)
+	_, _ = rand.Read(bytes)
+	challenge := base64.RawURLEncoding.EncodeToString(bytes)
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.challenges == nil {
+		h.challenges = map[string]bool{}
+	}
+	h.challenges[challenge] = true
+	return challenge
+}
+
+// verifyHubToken checks a token's signature over
+// hub1:<hubKey>:<nonce>:<expiry>, and uses up its nonce.
+func (h *TestHub) verifyHubToken(token string) bool {
 	parts := strings.Split(token, ".")
-	if len(parts) != 4 {
+	if len(parts) != 5 {
 		return false
 	}
 	public, err := parseSPKI(parts[1])
@@ -218,7 +234,16 @@ func verifyHubToken(token, hubKey string) bool {
 		return false
 	}
 	signature, err := base64.StdEncoding.DecodeString(parts[2])
-	return err == nil && ed25519.Verify(public, []byte("hub1:"+hubKey+":"+parts[3]), signature)
+	if err != nil || !ed25519.Verify(public, []byte("hub1:"+h.hubKey+":"+parts[4]+":"+parts[3]), signature) {
+		return false
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if !h.challenges[parts[4]] {
+		return false
+	}
+	delete(h.challenges, parts[4])
+	return true
 }
 
 // certifiedDevice returns the device id of a valid certificate for service.
@@ -342,10 +367,14 @@ func (h *TestHub) registerHandlers() {
 		return "ok", nil
 	})
 	h.ch.Post("hub/info", func(body channelgo.Body) (any, error) {
-		if !h.devices {
-			return nil, fmt.Errorf("api not found")
+		answer := map[string]any{"key": h.hubKey, "protocol": 2, "pro": true, "mode": "default-allow", "challenge": h.newChallenge()}
+		if input, ok := body.Body.(map[string]any); ok {
+			if nonce, ok := input["nonce"].(string); ok {
+				proof := ed25519.Sign(h.hubPrivate, []byte("hubinfo1:"+h.hubKey+":"+nonce))
+				answer["proof"] = base64.StdEncoding.EncodeToString(proof)
+			}
 		}
-		return map[string]any{"key": h.hubKey, "protocol": 1, "pro": true, "mode": "default-allow"}, nil
+		return answer, nil
 	})
 	h.ch.Post("hub/profile/update", func(body channelgo.Body) (any, error) {
 		return "ok", nil
