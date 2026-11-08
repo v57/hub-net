@@ -55,7 +55,8 @@ const LinkResourcePrefix = "link:"
 
 // SetLinkRules replaces the rules of every peer link: what linked devices may
 // open here. Flows of a port or device that left are terminated. A first call
-// installs the firewall, so every other overlay port drops from then on.
+// installs the firewall, also with no rules, so every other overlay port drops
+// from then on.
 func (m *Manager) SetLinkRules(rules []Rule) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -85,7 +86,7 @@ func (m *Manager) SetLinkRules(rules []Rule) error {
 			changed = true
 		}
 	}
-	if !changed && (len(rules) == 0 || m.linksInstalled) {
+	if !changed && m.linksInstalled {
 		return nil
 	}
 	if err := m.applyLocked(); err != nil {
@@ -132,6 +133,39 @@ func NewPlatformBackend(interfaceName string) (Backend, error) {
 		return nil, ErrInvalidAuthorization
 	}
 	return newPlatformBackend(interfaceName)
+}
+
+// PlatformSupported returns nil when this host has a firewall backend that
+// limits which of its ports overlay peers reach (Linux with nftables and
+// conntrack), else why not. It only checks; it installs nothing.
+func PlatformSupported() error {
+	_, err := newPlatformBackend("hubnet0")
+	return err
+}
+
+// UnlimitedPortsWarning is shown when this device joins its own Hub without a
+// firewall backend.
+const UnlimitedPortsWarning = "this device has no firewall backend, so its ports aren't limited to the ones it allows (hub-net ports): " +
+	"the Hub and its devices reach every port it listens on over the Hub Network"
+
+// ErrSharedHubWithoutFirewall refuses to join a Hub this device doesn't own
+// when nothing here limits which of its ports that Hub's devices reach.
+var ErrSharedHubWithoutFirewall = errors.New("refusing to join a Hub this device doesn't own without a firewall backend")
+
+// JoinCheck decides whether this device may join a Hub, from PlatformSupported's
+// result and whether the Hub is the user's own. With a firewall backend any Hub
+// may be joined. Without one the user's own Hub may, with UnlimitedPortsWarning,
+// and a shared one is refused with ErrSharedHubWithoutFirewall.
+func JoinCheck(platform error, own bool) (warning string, err error) {
+	switch {
+	case platform == nil:
+		return "", nil
+	case own:
+		return UnlimitedPortsWarning, nil
+	default:
+		return "", fmt.Errorf("%w (%v): this device couldn't limit which of its ports the Hub's devices reach, "+
+			"which needs Linux with nftables. If the Hub is your own, run hub-net join --own <code>", ErrSharedHubWithoutFirewall, platform)
+	}
 }
 
 type Manager struct {

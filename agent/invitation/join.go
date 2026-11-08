@@ -73,6 +73,13 @@ type JoinOptions struct {
 	// addresses by the device, so the join and the session then land on the
 	// same ones. Nil binds the key alone.
 	Device *hubservice.DeviceKey
+	// Admit, when set, runs before hub/net/bind with whether this device is an
+	// owner of the Hub (OwnerChecker; false when the Binder isn't one). An
+	// error refuses the join before the Hub records this device, and the
+	// temporary link comes down; a warning goes to JoinResult.Warning. The
+	// daemon sets it when this device has no firewall backend
+	// (enforcement.JoinCheck).
+	Admit func(owner bool) (warning string, err error)
 	// Logger receives progress. Defaults to a discard logger.
 	Logger *slog.Logger
 	// Timeout bounds the whole join (rendezvous, direct exchange, and bind).
@@ -113,6 +120,8 @@ type JoinResult struct {
 	OverlayAddresses []string
 	// HubName is the hub/header display name at bind time.
 	HubName string
+	// Warning is JoinOptions.Admit's warning for a join it let through.
+	Warning string
 }
 
 // Binder authenticates the joiner at hub-server through the temporary link and
@@ -121,6 +130,12 @@ type Binder interface {
 	// Bind issues the joiner's first hub/net/bind. admission is the
 	// inviter-signed bootstrap response hub-server requires to admit a new key.
 	Bind(ctx context.Context, address any, id *identity.Identity, wireGuardKey, name string, admission protocol.DirectBootstrapResponse) (BindResult, error)
+}
+
+// OwnerChecker is a Binder that can tell, through the temporary link and
+// before the bind, whether this device is an owner of the Hub.
+type OwnerChecker interface {
+	IsOwner(ctx context.Context, address any, id *identity.Identity) (bool, error)
 }
 
 // BindResult is the permanent membership issued by hub-server.
@@ -283,6 +298,19 @@ func Join(ctx context.Context, options JoinOptions) (JoinResult, error) {
 	// 4. Bind at hub-server through the inviter.
 	hubAddress := bootstrapHubAddress(response.HubProHost)
 	logger.Info("invitation join: hub/net/bind", slog.String("hub", hubAddress))
+	var warning string
+	if options.Admit != nil {
+		owner := false
+		if checker, ok := binder.(OwnerChecker); ok {
+			owner, err = checker.IsOwner(joinCtx, hubAddress, options.Identity)
+			if err != nil {
+				return JoinResult{}, fmt.Errorf("invitation: join: owner check: %w", err)
+			}
+		}
+		if warning, err = options.Admit(owner); err != nil {
+			return JoinResult{}, err
+		}
+	}
 	binding, err := binder.Bind(joinCtx, hubAddress, options.Identity, wireGuardKeyB64, "hub-net", response)
 	if err != nil {
 		return JoinResult{}, fmt.Errorf("invitation: join: hub/net/bind: %w", err)
@@ -303,6 +331,7 @@ func Join(ctx context.Context, options JoinOptions) (JoinResult, error) {
 		HubNetworkID:        binding.HubNetworkID,
 		OverlayAddresses:    binding.OverlayAddresses,
 		HubName:             binding.HeaderName,
+		Warning:             warning,
 	}, nil
 }
 
@@ -745,6 +774,56 @@ func (b hubServiceBinder) Bind(ctx context.Context, address any, id *identity.Id
 		return bindOnce(ctx, address, id, wireGuardKey, name, admission, nil)
 	}
 	return result, err
+}
+
+// ownerProbePath is a path under hub/, which no service registers: only an
+// owner may ask hub/grant/check about it.
+const ownerProbePath = "hub/net/owner"
+
+// IsOwner asks hub/grant/check about ownerProbePath with this device's
+// certificate. A non-owner may ask only about paths of services its connection
+// registered, so an answer means the device is an owner of the Hub. A refusal,
+// or any other error from the call (an older Hub without it), counts as not.
+func (b hubServiceBinder) IsOwner(ctx context.Context, address any, id *identity.Identity) (bool, error) {
+	if b.device == nil {
+		return false, nil
+	}
+	ready := make(chan struct{})
+	var once sync.Once
+	svc, err := hubconn.New(hubconn.Options{
+		Address:  address,
+		Identity: id,
+		Name:     "hub-net",
+		Device:   b.device,
+		OnConnect: func(*channelgo.Sender) {
+			once.Do(func() { close(ready) })
+		},
+	})
+	if err != nil {
+		return false, err
+	}
+	if err := svc.Start(); err != nil {
+		return false, err
+	}
+	defer svc.Stop()
+	select {
+	case <-ready:
+	case <-ctx.Done():
+		return false, ctx.Err()
+	}
+	answered := make(chan error, 1)
+	go func() {
+		_, err := hubconn.SendTyped[map[string]any](svc, "hub/grant/check", map[string]any{
+			"path": ownerProbePath, "caller": map[string]any{},
+		})
+		answered <- err
+	}()
+	select {
+	case err := <-answered:
+		return err == nil, nil
+	case <-ctx.Done():
+		return false, ctx.Err()
+	}
 }
 
 func bindOnce(ctx context.Context, address any, id *identity.Identity, wireGuardKey, name string, admission protocol.DirectBootstrapResponse, device *hubservice.DeviceKey) (BindResult, error) {

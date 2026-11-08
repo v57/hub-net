@@ -240,3 +240,45 @@ func TestRevokeSourcesDropsThePeersRulesOnly(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// countingBackend counts firewall installs.
+type countingBackend struct {
+	MemoryBackend
+	installs [][]Rule
+}
+
+func (b *countingBackend) ReplaceRules(rules []Rule) error {
+	b.installs = append(b.installs, append([]Rule(nil), rules...))
+	return b.MemoryBackend.ReplaceRules(rules)
+}
+
+// A member with no links, or links that name no port it allows, still gets the
+// firewall: every overlay port drops.
+func TestFirstLinkRulesInstallTheFirewallWithZeroRules(t *testing.T) {
+	backend := &countingBackend{}
+	manager, _ := New(backend)
+	if err := manager.SetLinkRules(nil); err != nil {
+		t.Fatal(err)
+	}
+	if len(backend.installs) != 1 || len(backend.installs[0]) != 0 {
+		t.Fatalf("installs = %v, want the table once with zero rules", backend.installs)
+	}
+	if err := manager.SetLinkRules(nil); err != nil {
+		t.Fatal(err)
+	}
+	if len(backend.installs) != 1 {
+		t.Fatalf("installs = %d after an unchanged empty set, want 1", len(backend.installs))
+	}
+}
+
+func TestJoinCheck(t *testing.T) {
+	if warning, err := JoinCheck(nil, false); warning != "" || err != nil {
+		t.Errorf("with a backend: %q, %v", warning, err)
+	}
+	if warning, err := JoinCheck(ErrPlatformUnsupported, true); warning != UnlimitedPortsWarning || err != nil {
+		t.Errorf("own Hub without a backend: %q, %v", warning, err)
+	}
+	if warning, err := JoinCheck(ErrPlatformUnsupported, false); warning != "" || !errors.Is(err, ErrSharedHubWithoutFirewall) {
+		t.Errorf("shared Hub without a backend: %q, %v", warning, err)
+	}
+}

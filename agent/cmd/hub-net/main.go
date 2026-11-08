@@ -21,6 +21,7 @@ import (
 	protocol "github.com/v57/hub-net-node/models"
 	"github.com/v57/hub-net/config"
 	"github.com/v57/hub-net/deviceports"
+	"github.com/v57/hub-net/enforcement"
 	"github.com/v57/hub-net/hubalias"
 	"github.com/v57/hub-net/hubconn"
 	"github.com/v57/hub-net/invitation"
@@ -86,6 +87,9 @@ func run(args []string) error {
 		switch request.Command {
 		case "join":
 			fmt.Println(management.FormatJoin(*response.Joined))
+			if response.Joined.Warning != "" {
+				fmt.Fprintln(os.Stderr, "hub-net: warning: "+response.Joined.Warning)
+			}
 		case "local":
 			fmt.Println("Serving " + response.Joined.Record.Alias + " as its local agent")
 		case "list":
@@ -212,7 +216,7 @@ func newJoin(store *membership.Store, stateDir, deviceKeyPath string, logger *sl
 	if err != nil {
 		return nil, err
 	}
-	return func(ctx context.Context, code string) (management.JoinResult, error) {
+	return func(ctx context.Context, code string, own bool) (management.JoinResult, error) {
 		decoded, err := invitation.Decode(code, time.Now())
 		if err != nil {
 			return management.JoinResult{}, fmt.Errorf("hub-net: join: %w", err)
@@ -241,10 +245,13 @@ func newJoin(store *membership.Store, stateDir, deviceKeyPath string, logger *sl
 		result, err := invitation.Join(ctx, invitation.JoinOptions{
 			Code: code, Identity: id, WireGuardKey: wireGuardKey,
 			InterfaceName: interfaceName, Adapter: adapter, Logger: logger,
-			Device: device,
+			Device: device, Admit: joinAdmit(enforcement.PlatformSupported(), own),
 		})
 		if err != nil {
 			return management.JoinResult{}, err
+		}
+		if result.Warning != "" {
+			logger.Warn("joined without port limits", "hub", result.HubName, "warning", result.Warning)
 		}
 		// Join left the temporary link up so the daemon session can adopt it.
 		// Any failure while persisting the membership tears the link down
@@ -292,8 +299,24 @@ func newJoin(store *membership.Store, stateDir, deviceKeyPath string, logger *sl
 		committed = true
 		return management.JoinResult{
 			Record: record, VirtualHost: result.HubProHost, VirtualIP: overlayIPv4(result.OverlayAddresses),
+			Warning: result.Warning,
 		}, nil
 	}, nil
+}
+
+// joinAdmit applies decision H4 to a join. On a device without a firewall
+// backend (platform is enforcement.PlatformSupported's result) a Hub this
+// device doesn't own is refused, and the user's own Hub is joined with a
+// warning. The Hub is the user's own when they said so (own: join --own) or
+// when it answers that this device is one of its owners, which the join asks
+// through the temporary link before it binds. Nil with a backend: any Hub.
+func joinAdmit(platform error, own bool) func(owner bool) (string, error) {
+	if platform == nil {
+		return nil
+	}
+	return func(owner bool) (string, error) {
+		return enforcement.JoinCheck(platform, own || owner)
+	}
 }
 
 // newLocal builds the `hub-net local` command: a membership for the hub-server

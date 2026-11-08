@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -106,7 +107,7 @@ func result(id, alias string) JoinResult {
 }
 
 func TestJoinExactOutputAndSocketPermissions(t *testing.T) {
-	service, _, _ := testService(t, func(context.Context, string) (JoinResult, error) {
+	service, _, _ := testService(t, func(context.Context, string, bool) (JoinResult, error) {
 		return result("one", "work"), nil
 	})
 	socketDir, err := os.MkdirTemp("/tmp", "hub-net-management-")
@@ -159,7 +160,7 @@ func TestCommandsSerializeAndLeaveIsIdempotent(t *testing.T) {
 	var active atomic.Int32
 	var maximum atomic.Int32
 	var sequence atomic.Int32
-	service, daemon, store := testService(t, func(context.Context, string) (JoinResult, error) {
+	service, daemon, store := testService(t, func(context.Context, string, bool) (JoinResult, error) {
 		now := active.Add(1)
 		defer active.Add(-1)
 		for {
@@ -448,5 +449,41 @@ func TestPauseResumeKeepsTheMembershipAndListsIt(t *testing.T) {
 	execute("leave", "work")
 	if items := execute("list").Items; len(items) != 0 {
 		t.Fatalf("leaving a paused membership leaves %+v", items)
+	}
+}
+
+// join --own reaches the join, a refusal comes back as the error the CLI
+// prints, and a warning comes back with the result.
+func TestJoinOwnFlagRefusalAndWarning(t *testing.T) {
+	var owns []bool
+	service, _, _ := testService(t, func(_ context.Context, _ string, own bool) (JoinResult, error) {
+		owns = append(owns, own)
+		if !own {
+			return JoinResult{}, errors.New("refusing to join a Hub this device doesn't own")
+		}
+		joined := result("own-id", "home")
+		joined.Warning = "ports not limited"
+		return joined, nil
+	})
+	if _, err := ParseCommand([]string{"join", "--own"}); err == nil {
+		t.Fatal("join --own without a code accepted")
+	}
+	shared, err := ParseCommand([]string{"join", "code"})
+	if err != nil || shared.Own {
+		t.Fatalf("join code = %+v, %v", shared, err)
+	}
+	if response := service.Execute(context.Background(), shared); !strings.Contains(response.Error, "refusing to join") || response.Joined != nil {
+		t.Fatalf("shared join response = %+v", response)
+	}
+	own, err := ParseCommand([]string{"join", "--own", "code"})
+	if err != nil || !own.Own || own.Code != "code" {
+		t.Fatalf("join --own code = %+v, %v", own, err)
+	}
+	response := service.Execute(context.Background(), own)
+	if response.Error != "" || response.Joined == nil || response.Joined.Warning != "ports not limited" {
+		t.Fatalf("own join response = %+v", response)
+	}
+	if len(owns) != 2 || owns[0] || !owns[1] {
+		t.Fatalf("own passed = %v", owns)
 	}
 }

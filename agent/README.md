@@ -140,6 +140,21 @@ Both files are written with mode `0600`. Rotation of either key never touches
 the other; Hub binds a new WireGuard public key to the same profile through a
 fresh short-lived grant.
 
+## Joining without a firewall backend
+
+The device's port list (`hub-net ports`) is enforced only by the Linux
+nftables backend. Where there's none (macOS and Windows builds, Linux without
+`nft`), `hub-net join` refuses a Hub this device doesn't own, since nothing
+would stop that Hub's devices from reaching every port it listens on. The Hub
+counts as your own when it answers that this device is one of its owners: the
+join asks `hub/grant/check` about a `hub/` path with the device's certificate,
+through the temporary link and before it binds, and only an owner gets an
+answer. A Hub that can't answer (older ones, or a device key that isn't an
+owner's) counts as shared. `hub-net join --own <invite>` says the Hub is yours
+anyway (the command socket's `join` takes `"own": true`). Joining your own Hub
+without a backend goes through with a warning that the device's ports aren't
+limited; `hub-net local` (the Hub on this machine) is always your own.
+
 ## Desktop app (Hub on Linux)
 
 The Hub app on Linux drives this agent instead of a packet tunnel. It sends

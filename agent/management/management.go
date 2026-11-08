@@ -33,9 +33,15 @@ type JoinResult struct {
 	Record      membership.Record `json:"record"`
 	VirtualHost string            `json:"virtualHost"`
 	VirtualIP   string            `json:"virtualIp"`
+	// Warning is shown with the result: the Hub was joined, but something
+	// doesn't hold, like port limits on a device without a firewall backend.
+	Warning string `json:"warning,omitempty"`
 }
 
-type JoinFunc func(context.Context, string) (JoinResult, error)
+// JoinFunc joins the Hub of an invitation code. own says the user stated the
+// Hub is their own (hub-net join --own), which a device without a firewall
+// backend needs to join a Hub it can't prove it owns.
+type JoinFunc func(ctx context.Context, code string, own bool) (JoinResult, error)
 
 // LocalFunc creates the membership for the hub running on this machine from
 // its address.
@@ -73,6 +79,8 @@ type Request struct {
 	Version int    `json:"version"`
 	Command string `json:"command"`
 	Code    string `json:"code,omitempty"`
+	// Own is join's --own: the user says the Hub is their own.
+	Own     bool   `json:"own,omitempty"`
 	Address string `json:"address,omitempty"`
 	Alias   string `json:"alias,omitempty"`
 	Port    uint16 `json:"port,omitempty"`
@@ -103,7 +111,7 @@ func (s *Service) Execute(ctx context.Context, request Request) Response {
 			response.Error = "join unavailable"
 			break
 		}
-		result, err := s.join(ctx, request.Code)
+		result, err := s.join(ctx, request.Code, request.Own)
 		if err != nil {
 			response.Error = err.Error()
 			break
@@ -557,10 +565,15 @@ func ParseCommand(args []string) (Request, error) {
 	request.Command = args[0]
 	switch request.Command {
 	case "join":
-		if len(args) != 2 {
-			return request, errors.New("usage: hub-net join <code-or-url>")
+		rest := args[1:]
+		if len(rest) > 0 && (rest[0] == "--own" || rest[0] == "-own") {
+			request.Own = true
+			rest = rest[1:]
 		}
-		request.Code = args[1]
+		if len(rest) != 1 {
+			return request, errors.New("usage: hub-net join [--own] <code-or-url>")
+		}
+		request.Code = rest[0]
 	case "local":
 		if len(args) > 2 {
 			return request, errors.New("usage: hub-net local [hub-address]")
