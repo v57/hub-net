@@ -7,7 +7,7 @@ GOOS ?= $(shell $(GO) env GOOS)
 GOARCH ?= $(shell $(GO) env GOARCH)
 PACKAGE_NAME = hub-net-$(VERSION)-$(GOOS)-$(GOARCH)
 
-.PHONY: all build test package install integration-linux-package integration-multi-hub-linux integration-hn706-release integration-machine-restart-prepare integration-machine-restart-verify
+.PHONY: all build test package package-windows install integration-linux-package integration-multi-hub-linux integration-hn706-release integration-machine-restart-prepare integration-machine-restart-verify
 
 all: build
 
@@ -33,6 +33,17 @@ package: build
 	else \
 		cd build && shasum -a 256 "$(PACKAGE_NAME).tar.gz" > "$(PACKAGE_NAME).tar.gz.sha256"; \
 	fi
+
+# The Windows zip: hub-net.exe and its README (wireguard.dll comes from WireGuard's signed release,
+# see packaging/windows/README.md). make package-windows GOARCH=arm64 VERSION=1.0.0
+package-windows:
+	rm -rf "build/package/hub-net-$(VERSION)-windows-$(GOARCH)"
+	mkdir -p "build/package/hub-net-$(VERSION)-windows-$(GOARCH)"
+	CGO_ENABLED=0 GOOS=windows GOARCH=$(GOARCH) $(GO) build -trimpath -ldflags="-s -w -X main.buildVersion=$(VERSION)" \
+		-o "build/package/hub-net-$(VERSION)-windows-$(GOARCH)/hub-net.exe" ./cmd/hub-net
+	cp packaging/windows/README.md "build/package/hub-net-$(VERSION)-windows-$(GOARCH)/"
+	cd build/package && rm -f "../hub-net-$(VERSION)-windows-$(GOARCH).zip" && \
+		zip -qr "../hub-net-$(VERSION)-windows-$(GOARCH).zip" "hub-net-$(VERSION)-windows-$(GOARCH)"
 
 install: build
 	install -d -m 0755 "$(DESTDIR)$(PREFIX)/bin"

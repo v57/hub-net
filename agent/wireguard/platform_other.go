@@ -3,7 +3,7 @@
 // needs WireGuardNT). Until a real adapter lands, every operation fails safely
 // with ErrPlatformUnsupported so the agent never advertises a working profile.
 
-//go:build !linux
+//go:build !linux && !windows
 
 package wireguard
 

@@ -38,13 +38,21 @@ import (
 var buildVersion = "dev"
 
 func main() {
-	if err := run(os.Args[1:]); err != nil {
+	// Under the Windows service manager the daemon runs until the service
+	// stops; elsewhere, until SIGINT or SIGTERM.
+	if handled, err := runAsService(func(ctx context.Context) error { return run(ctx, os.Args[1:]) }); handled {
+		if err != nil {
+			os.Exit(1)
+		}
+		return
+	}
+	if err := run(context.Background(), os.Args[1:]); err != nil {
 		fmt.Fprintf(os.Stderr, "hub-net: %v\n", err)
 		os.Exit(1)
 	}
 }
 
-func run(args []string) error {
+func run(parent context.Context, args []string) error {
 	cfg := config.Defaults()
 	flags := flag.NewFlagSet("hub-net", flag.ContinueOnError)
 	stateDir := flags.String("state-dir", cfg.StateDir, "agent state directory")
@@ -75,6 +83,10 @@ func run(args []string) error {
 			fmt.Println(output)
 		}
 		return err
+	}
+	if flags.NArg() > 0 && flags.Arg(0) == "service" {
+		// The flags before "service" become the installed daemon's flags
+		return serviceCommand(flags.Args()[1:], args[:len(args)-flags.NArg()])
 	}
 	if flags.NArg() > 0 {
 		request, err := management.ParseCommand(flags.Args())
@@ -107,6 +119,12 @@ func run(args []string) error {
 		return nil
 	}
 
+	if err := prepareStateDir(*stateDir); err != nil {
+		return err
+	}
+	if *deviceKey == "" {
+		*deviceKey = defaultDeviceKey()
+	}
 	store, err := membership.Open(*stateDir)
 	if err != nil {
 		return err
@@ -181,7 +199,7 @@ func run(args []string) error {
 	if err != nil {
 		return err
 	}
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	ctx, cancel := signal.NotifyContext(parent, os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 	daemonDone := make(chan error, 1)
 	go func() { daemonDone <- daemon.Run(ctx) }()
@@ -209,12 +227,19 @@ func run(args []string) error {
 }
 
 // defaultCommandSocket is the state directory's command.sock. For the
-// default state directory a command (not the daemon) uses the packaged
-// service's /run/hub-net/command.sock on Linux when it's there.
+// default state directory (the one the service and Hub use) it is the
+// well-known pipe \\.\pipe\hub-net-command on Windows, and a command (not
+// the daemon) uses the packaged service's /run/hub-net/command.sock on Linux
+// when it's there.
 func defaultCommandSocket(stateDir string, client bool) string {
-	if filepath.Clean(stateDir) == filepath.Clean(config.DefaultStateDir()) && runtime.GOOS == "linux" && client {
-		if _, err := os.Stat(sharedCommandSocket); err == nil {
-			return sharedCommandSocket
+	if filepath.Clean(stateDir) == filepath.Clean(config.DefaultStateDir()) {
+		switch {
+		case runtime.GOOS == "windows":
+			return `\\.\pipe\hub-net-command`
+		case runtime.GOOS == "linux" && client:
+			if _, err := os.Stat(sharedCommandSocket); err == nil {
+				return sharedCommandSocket
+			}
 		}
 	}
 	return filepath.Join(stateDir, "command.sock")
