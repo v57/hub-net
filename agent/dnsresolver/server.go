@@ -57,6 +57,9 @@ func (s *Server) StartUnconfigured(ctx context.Context, address string) error {
 		s.mu.Unlock()
 		return errors.New("dnsresolver: already started")
 	}
+	if chooser, ok := s.Installer.(ListenAddressChooser); ok {
+		address = chooser.ListenAddress(address)
+	}
 	conn, err := net.ListenPacket("udp", address)
 	if err != nil {
 		s.mu.Unlock()
@@ -68,6 +71,13 @@ func (s *Server) StartUnconfigured(ctx context.Context, address string) error {
 
 	go s.serve(runCtx, conn)
 	return nil
+}
+
+// ListenAddressChooser is an Installer that needs the resolver on a
+// particular address: Windows NRPT takes a server address but no port, so
+// the resolver moves to port 53 of a loopback address of its own.
+type ListenAddressChooser interface {
+	ListenAddress(configured string) string
 }
 
 // Install applies split DNS to the already-running server. Reinstallation
