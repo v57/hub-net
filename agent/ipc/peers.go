@@ -83,20 +83,22 @@ func withPeerUID(ctx context.Context, uid int) context.Context {
 	return context.WithValue(ctx, peerCtxKey{}, uid)
 }
 
-// peerConnListener wraps a Unix-domain listener so each accepted connection
-// is annotated with the peer's effective uid. The uid is read once at accept
-// time on Linux (SO_PEERCRED) and Darwin (LOCAL_PEERCRED) and stored in a
-// side table keyed by the *net.UnixConn so ConnContext can look it up.
+// peerConnListener wraps a local listener so each accepted connection is
+// annotated with the peer's effective uid. The uid is read once at accept
+// time on Linux (SO_PEERCRED), Darwin (LOCAL_PEERCRED) and Windows (the pipe
+// client's token, peerconn_windows.go) and stored in a side table keyed by
+// the connection so ConnContext can look it up. A peer whose credentials
+// can't be read gets no entry, so VerifyLocalPeer refuses it.
 type peerConnListener struct {
 	net.Listener
 	mu    sync.Mutex
-	creds map[*net.UnixConn]int
+	creds map[net.Conn]int
 }
 
 func newPeerConnListener(ln net.Listener) *peerConnListener {
 	return &peerConnListener{
 		Listener: ln,
-		creds:    make(map[*net.UnixConn]int),
+		creds:    make(map[net.Conn]int),
 	}
 }
 
@@ -106,58 +108,31 @@ func (l *peerConnListener) Accept() (net.Conn, error) {
 	if err != nil {
 		return nil, err
 	}
-	uc, ok := conn.(*net.UnixConn)
+	uid, ok := readPeer(conn)
 	if !ok {
-		// Not a Unix socket (e.g. tests using a TCP listener): do not
+		// Not a local socket (e.g. tests using a TCP listener): do not
 		// annotate; VerifyLocalPeer will reject unless AllowAnyLocal is set.
 		return conn, nil
 	}
-	uid, _ := readPeerUID(uc) // _ = unreadable is non-fatal; caller policy decides
 	l.mu.Lock()
-	l.creds[uc] = uid
+	l.creds[conn] = uid
 	l.mu.Unlock()
 	return conn, nil
 }
 
 // uidFor returns the recorded peer uid for conn, if any.
 func (l *peerConnListener) uidFor(conn net.Conn) (int, bool) {
-	uc, ok := conn.(*net.UnixConn)
-	if !ok {
-		return 0, false
-	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	uid, ok := l.creds[uc]
+	uid, ok := l.creds[conn]
 	return uid, ok
 }
 
 // forget drops the conn's recorded uid. Called when the conn closes.
 func (l *peerConnListener) forget(conn net.Conn) {
-	uc, ok := conn.(*net.UnixConn)
-	if !ok {
-		return
-	}
 	l.mu.Lock()
-	delete(l.creds, uc)
+	delete(l.creds, conn)
 	l.mu.Unlock()
-}
-
-// readPeerUID reads the connecting peer's effective uid via the platform's
-// peer-credential socket option.
-func readPeerUID(conn *net.UnixConn) (int, error) {
-	raw, err := conn.SyscallConn()
-	if err != nil {
-		return 0, err
-	}
-	var uid int
-	var sockErr error
-	ctrlErr := raw.Control(func(fd uintptr) {
-		uid, sockErr = peerUIDFromFD(int(fd))
-	})
-	if ctrlErr != nil {
-		return 0, ctrlErr
-	}
-	return uid, sockErr
 }
 
 // peerUIDFromFD is implemented per-platform in peers_linux.go,

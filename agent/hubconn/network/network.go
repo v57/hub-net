@@ -21,6 +21,7 @@ import (
 	"time"
 
 	protocol "github.com/v57/hub-net-node/models"
+	"github.com/v57/hub-net/localsock"
 )
 
 // WireVersion is the Hub Network protocol wire version.
@@ -394,8 +395,8 @@ func (p *Publisher) agentPost(ctx context.Context, path string, body any) (map[s
 	defer cancel()
 
 	transport := &http.Transport{
-		DialContext: func(_ context.Context, _, _ string) (net.Conn, error) {
-			return net.Dial("unix", p.agentSocket)
+		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+			return localsock.Dial(ctx, p.agentSocket)
 		},
 	}
 	client := &http.Client{Transport: transport}

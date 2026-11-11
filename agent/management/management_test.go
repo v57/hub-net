@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -110,13 +111,13 @@ func TestJoinExactOutputAndSocketPermissions(t *testing.T) {
 	service, _, _ := testService(t, func(context.Context, string, bool) (JoinResult, error) {
 		return result("one", "work"), nil
 	})
-	socketDir, err := os.MkdirTemp("/tmp", "hub-net-management-")
+	socketDir, err := os.MkdirTemp(shortTempRoot(), "hub-net-management-")
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { os.RemoveAll(socketDir) })
 	socket := filepath.Join(socketDir, "command.sock")
-	server, err := NewServer(socket, service)
+	server, err := NewServer(socket, service, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -124,16 +125,18 @@ func TestJoinExactOutputAndSocketPermissions(t *testing.T) {
 	defer cancel()
 	go server.Serve(ctx)
 
-	info, err := filepath.Glob(socket)
-	if err != nil || len(info) != 1 {
+	if info, err := filepath.Glob(socket); runtime.GOOS != "windows" && (err != nil || len(info) != 1) {
 		t.Fatalf("socket missing: %v", err)
 	}
-	mode, err := statMode(socket)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if mode != 0o600 {
-		t.Fatalf("socket mode = %o", mode)
+	if runtime.GOOS != "windows" {
+		// Windows: a named pipe with a DACL, checked in localsock
+		mode, err := statMode(socket)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if mode != 0o600 {
+			t.Fatalf("socket mode = %o", mode)
+		}
 	}
 	response, err := NewClient(socket).Execute(context.Background(), Request{
 		Version: Version, Command: "join", Code: "code",
@@ -146,6 +149,14 @@ func TestJoinExactOutputAndSocketPermissions(t *testing.T) {
 	if got != want {
 		t.Fatalf("output = %q", got)
 	}
+}
+
+// shortTempRoot keeps Unix socket paths under macOS's 104-byte limit.
+func shortTempRoot() string {
+	if runtime.GOOS == "windows" {
+		return os.TempDir()
+	}
+	return "/tmp"
 }
 
 func statMode(path string) (uint32, error) {
@@ -245,13 +256,13 @@ func TestRemoveAllDeletesEveryLiveAndPersistedMembership(t *testing.T) {
 
 func TestServerRejectsOversizedRequest(t *testing.T) {
 	service, _, _ := testService(t, nil)
-	socketDir, err := os.MkdirTemp("/tmp", "hub-net-management-")
+	socketDir, err := os.MkdirTemp(shortTempRoot(), "hub-net-management-")
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { os.RemoveAll(socketDir) })
 	socket := filepath.Join(socketDir, "command.sock")
-	server, err := NewServer(socket, service)
+	server, err := NewServer(socket, service, "")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -14,6 +14,7 @@ import (
 
 	"github.com/v57/hub-net-node/identity"
 	protocol "github.com/v57/hub-net-node/models"
+	"github.com/v57/hub-net/localsock"
 )
 
 func TestBindingProofBindsLocalAgentProfileConnectionAndCapability(t *testing.T) {
@@ -97,7 +98,7 @@ func TestBindingProofUnixSocketEndpoint(t *testing.T) {
 	})
 	deadline := time.Now().Add(time.Second)
 	for {
-		if connection, err := net.Dial("unix", socketPath); err == nil {
+		if connection, err := localsock.Dial(context.Background(), socketPath); err == nil {
 			_ = connection.Close()
 			break
 		}
@@ -117,7 +118,7 @@ func TestBindingProofUnixSocketEndpoint(t *testing.T) {
 	})
 	client := &http.Client{Transport: &http.Transport{
 		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
-			return (&net.Dialer{}).DialContext(ctx, "unix", socketPath)
+			return localsock.Dial(ctx, socketPath)
 		},
 	}}
 	response, err := client.Post("http://unix/binding/proof", "application/json", bytes.NewReader(payload))

@@ -48,7 +48,7 @@ func run(args []string) error {
 	flags := flag.NewFlagSet("hub-net", flag.ContinueOnError)
 	stateDir := flags.String("state-dir", cfg.StateDir, "agent state directory")
 	socketPath := flags.String("socket", "", "daemon command IPC socket")
-	socketGroup := flags.String("socket-group", "", "local group that may send commands too (socket mode 0660), e.g. for Hub on Linux")
+	socketGroup := flags.String("socket-group", "", "local group that may send commands too (socket mode 0660, or a pipe ACE on Windows), e.g. for Hub")
 	dnsListen := flags.String("dns-listen", cfg.DNSListenAddress, "reserved-suffix DNS listen address")
 	bootstrapListen := flags.String("bootstrap-listen", cfg.BootstrapListenAddress, "UDP address of the inviter's bootstrap listener (local hub only)")
 	deviceKey := flags.String("device-key", "", "device key file (default $HUB_DEVICE_KEY, /var/lib/hub/device.key as root, else ~/.hub/device.key)")
@@ -176,15 +176,9 @@ func run(args []string) error {
 	if err != nil {
 		return err
 	}
-	server, err := management.NewServer(*socketPath, service)
+	server, err := management.NewServer(*socketPath, service, *socketGroup)
 	if err != nil {
 		return err
-	}
-	if *socketGroup != "" {
-		if err := server.ShareWithGroup(*socketGroup); err != nil {
-			_ = server.Close(context.Background())
-			return err
-		}
 	}
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()

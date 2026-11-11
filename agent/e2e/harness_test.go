@@ -15,6 +15,7 @@ import (
 
 	protocol "github.com/v57/hub-net-node/models"
 	"github.com/v57/hub-net/e2e"
+	"github.com/v57/hub-net/localsock"
 )
 
 // TestE2EAuthorizedTCPShare drives the full local authorization chain for a
@@ -232,7 +233,7 @@ func postJSON(socketPath, path string, body any) (map[string]any, int, error) {
 	}
 	transport := &http.Transport{
 		DialContext: func(_ context.Context, _, _ string) (net.Conn, error) {
-			return net.Dial("unix", socketPath)
+			return localsock.Dial(context.Background(), socketPath)
 		},
 	}
 	client := &http.Client{Transport: transport, Timeout: 5 * time.Second}

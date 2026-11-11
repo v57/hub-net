@@ -10,8 +10,6 @@ import (
 	"io"
 	"net"
 	"net/http"
-	"os"
-	"os/user"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -19,6 +17,7 @@ import (
 	"time"
 
 	hubnet "github.com/v57/hub-net"
+	"github.com/v57/hub-net/localsock"
 	"github.com/v57/hub-net/membership"
 	"github.com/v57/hub-net/publications"
 	"github.com/v57/hub-net/supervisor"
@@ -462,21 +461,18 @@ type Server struct {
 	http     *http.Server
 }
 
-func NewServer(path string, service *Service) (*Server, error) {
+// NewServer listens on the command socket: owner-only (0600; on Windows a
+// pipe for SYSTEM, elevated Administrators and the agent's account), or
+// opened to group as well when group isn't empty (0660), so a desktop app run
+// by a member of the group (Hub on Linux and Windows) sends join, leave and
+// list itself. On Unix the socket's directory must let the group through.
+func NewServer(path string, service *Service, group string) (*Server, error) {
 	if path == "" || service == nil {
 		return nil, errors.New("management: socket path and service required")
 	}
-	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return nil, err
-	}
-	listener, err := net.Listen("unix", path)
+	listener, err := localsock.Listen(path, localsock.Access{Group: group})
 	if err != nil {
-		return nil, err
-	}
-	if err := os.Chmod(path, 0o600); err != nil {
-		listener.Close()
-		os.Remove(path)
-		return nil, err
+		return nil, fmt.Errorf("management: %w", err)
 	}
 	server := &Server{path: path, service: service, listener: listener}
 	server.http = &http.Server{
@@ -488,25 +484,6 @@ func NewServer(path string, service *Service) (*Server, error) {
 		WriteTimeout: 12 * time.Minute,
 	}
 	return server, nil
-}
-
-// ShareWithGroup opens the command socket to a local group: owner and group
-// may read and write it (0660). A desktop app run by a member of the group
-// (Hub on Linux) then sends join, leave and list itself. The socket's
-// directory must let the group through.
-func (s *Server) ShareWithGroup(name string) error {
-	group, err := user.LookupGroup(name)
-	if err != nil {
-		return fmt.Errorf("management: socket group %q: %w", name, err)
-	}
-	gid, err := strconv.Atoi(group.Gid)
-	if err != nil {
-		return fmt.Errorf("management: socket group %q: %w", name, err)
-	}
-	if err := os.Chown(s.path, -1, gid); err != nil {
-		return err
-	}
-	return os.Chmod(s.path, 0o660)
 }
 
 func (s *Server) Serve(ctx context.Context) error {
@@ -526,11 +503,7 @@ func (s *Server) Serve(ctx context.Context) error {
 
 func (s *Server) Close(ctx context.Context) error {
 	err := s.http.Shutdown(ctx)
-	removeErr := os.Remove(s.path)
-	if errors.Is(removeErr, os.ErrNotExist) {
-		removeErr = nil
-	}
-	return errors.Join(err, removeErr)
+	return errors.Join(err, localsock.Remove(s.path))
 }
 
 func (s *Server) handle(writer http.ResponseWriter, request *http.Request) {
@@ -570,7 +543,7 @@ type Client struct {
 
 func NewClient(socketPath string) *Client {
 	transport := &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
-		return (&net.Dialer{}).DialContext(ctx, "unix", socketPath)
+		return localsock.Dial(ctx, socketPath)
 	}}
 	return &Client{http: &http.Client{Transport: transport, Timeout: 13 * time.Minute}}
 }

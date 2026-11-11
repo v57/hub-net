@@ -117,6 +117,9 @@ func TestPrepareIsIdempotentAcrossInstances(t *testing.T) {
 	}
 	firstSnap := first.profile.Snapshot()
 
+	// A restart: the first instance's service socket goes first (Windows
+	// creates a pipe exclusively; Unix would replace the socket file).
+	_ = first.ipcServer.Close(context.Background())
 	second, err := New(Options{Config: cfg})
 	if err != nil {
 		t.Fatalf("New second: %v", err)

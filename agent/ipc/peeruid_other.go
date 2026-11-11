@@ -2,7 +2,7 @@
 // socket options. Peer enforcement there must rely entirely on the socket's
 // filesystem permissions; VerifyLocalPeer returns ErrPeerUnknown unless
 // PeerPolicy.AllowAnyLocal is set.
-//go:build !linux && !darwin && !freebsd
+//go:build !linux && !darwin && !freebsd && !windows
 
 package ipc
 

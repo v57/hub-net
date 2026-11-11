@@ -4,12 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"net"
 	"net/http"
 	"testing"
 	"time"
 
 	protocol "github.com/v57/hub-net-node/models"
+	"github.com/v57/hub-net/localsock"
 )
 
 // fakeSigner records the nonce it was asked to sign.
@@ -161,7 +161,7 @@ func TestDefaultPolicyIsPrivate(t *testing.T) {
 func TestAgentPostViaUnixSocket(t *testing.T) {
 	dir := t.TempDir()
 	socketPath := dir + "/agent.sock"
-	listener, err := net.Listen("unix", socketPath)
+	listener, err := localsock.Listen(socketPath, localsock.Access{})
 	if err != nil {
 		t.Fatalf("listen unix: %v", err)
 	}

@@ -22,6 +22,7 @@ import (
 	"github.com/v57/hub-net/enforcement"
 	"github.com/v57/hub-net/hubconn"
 	servicenetwork "github.com/v57/hub-net/hubconn/network"
+	"github.com/v57/hub-net/localsock"
 	"github.com/v57/hub-net/profile"
 	"github.com/v57/hub-net/wireguard"
 )
@@ -800,7 +801,7 @@ func postJSONAgent(socketPath, path string, body any) (map[string]any, int, erro
 	}
 	transport := &http.Transport{
 		DialContext: func(_ context.Context, _, _ string) (net.Conn, error) {
-			return net.Dial("unix", socketPath)
+			return localsock.Dial(context.Background(), socketPath)
 		},
 	}
 	client := &http.Client{Transport: transport, Timeout: 5 * time.Second}
@@ -823,7 +824,9 @@ func postJSONAgent(socketPath, path string, body any) (map[string]any, int, erro
 func waitForSocket(path string, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
-		conn, err := net.Dial("unix", path)
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		conn, err := localsock.Dial(ctx, path)
+		cancel()
 		if err == nil {
 			_ = conn.Close()
 			return nil

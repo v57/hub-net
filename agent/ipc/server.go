@@ -31,6 +31,8 @@ import (
 	"os"
 	"sync"
 	"time"
+
+	"github.com/v57/hub-net/localsock"
 )
 
 // MaxRequestBytes bounds a single IPC request body. Requests carry short
@@ -108,18 +110,11 @@ func NewServer(opts ServerOptions) (*Server, error) {
 		policy.RootOK = true
 	}
 
-	// Remove any stale socket file from a prior crash before binding.
-	if err := os.Remove(opts.SocketPath); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return nil, fmt.Errorf("ipc: remove stale socket %s: %w", opts.SocketPath, err)
-	}
-	listener, err := net.Listen("unix", opts.SocketPath)
+	// Listen removes a stale socket file from a prior crash before binding
+	// (Unix) or creates the named pipe exclusively with its DACL (Windows).
+	listener, err := localsock.Listen(opts.SocketPath, localsock.Access{Mode: uint32(mode.Perm())})
 	if err != nil {
-		return nil, fmt.Errorf("ipc: listen unix %s: %w", opts.SocketPath, err)
-	}
-	if err := os.Chmod(opts.SocketPath, mode); err != nil {
-		_ = listener.Close()
-		_ = os.Remove(opts.SocketPath)
-		return nil, fmt.Errorf("ipc: chmod socket %s: %w", opts.SocketPath, err)
+		return nil, fmt.Errorf("ipc: listen %s: %w", opts.SocketPath, err)
 	}
 	// Wrap so peer credentials are read once per accepted connection and
 	// surfaced to handlers via the request context.
@@ -234,6 +229,11 @@ func (s *Server) Close(ctx context.Context) error {
 		defer cancel()
 	}
 	err := s.httpServer.Shutdown(shutdownCtx)
+	// Shutdown closes only the listeners Serve took: one bound by NewServer
+	// and never served is closed here (on Windows it keeps the pipe).
+	if closeErr := s.peerListener.Close(); closeErr != nil && !errors.Is(closeErr, net.ErrClosed) && err == nil {
+		err = closeErr
+	}
 	s.cleanupSocket()
 	return err
 }
@@ -244,7 +244,7 @@ func (s *Server) cleanupSocket() {
 	s.mu.Lock()
 	s.listener = nil
 	s.mu.Unlock()
-	if err := os.Remove(s.opts.SocketPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+	if err := localsock.Remove(s.opts.SocketPath); err != nil {
 		s.logger.Warn("ipc socket cleanup failed",
 			slog.String("socket", s.opts.SocketPath),
 			slog.String("err", err.Error()),

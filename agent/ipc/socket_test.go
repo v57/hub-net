@@ -18,6 +18,7 @@ import (
 
 	"github.com/v57/hub-net-node/identity"
 	protocol "github.com/v57/hub-net-node/models"
+	"github.com/v57/hub-net/localsock"
 )
 
 // newTestServer spins up a socket-bound Server backed by a real AttestHandler
@@ -432,6 +433,12 @@ func TestSocketFileRemovedOnClose(t *testing.T) {
 	if _, statErr := os.Stat(socketPath); !os.IsNotExist(statErr) {
 		t.Fatalf("socket still present after close: %v", statErr)
 	}
+	dialCtx, cancelDial := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancelDial()
+	if conn, err := localsock.Dial(dialCtx, socketPath); err == nil {
+		conn.Close()
+		t.Fatal("endpoint still answers after close")
+	}
 }
 
 // --- helpers --------------------------------------------------------------
@@ -463,8 +470,8 @@ func doUnix(t *testing.T, method, socketPath, path string, body io.Reader) (*htt
 	req.Header.Set("content-type", "application/json")
 	client := &http.Client{
 		Transport: &http.Transport{
-			DialContext: func(_ context.Context, _, _ string) (net.Conn, error) {
-				return net.Dial("unix", socketPath)
+			DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+				return localsock.Dial(ctx, socketPath)
 			},
 		},
 		Timeout: 2 * time.Second,
