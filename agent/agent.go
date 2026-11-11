@@ -775,6 +775,15 @@ func (a *Agent) Run(ctx context.Context) (err error) {
 			a.logger.Error("gateway teardown failed", slog.String("err", err.Error()))
 		}
 	}()
+	defer func() {
+		// The Windows WFP backend holds its filters in a session of this
+		// process: release them on shutdown (they also go if it dies).
+		if closer, ok := a.enforcementBackend.(interface{ Close() error }); ok {
+			if err := closer.Close(); err != nil {
+				a.logger.Error("enforcement teardown failed", slog.String("err", err.Error()))
+			}
+		}
+	}()
 	var dnsErr error
 	if a.production {
 		dnsErr = a.dnsServer.StartUnconfigured(runCtx, a.config.DNSListenAddress)
