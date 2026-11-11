@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"syscall"
 	"time"
 
@@ -63,7 +64,7 @@ func run(args []string) error {
 		return nil
 	}
 	if *socketPath == "" {
-		*socketPath = filepath.Join(*stateDir, "command.sock")
+		*socketPath = defaultCommandSocket(*stateDir, flags.NArg() > 0)
 	}
 	devicePortsPath := filepath.Join(*stateDir, hubnet.DevicePortsFile)
 	if flags.NArg() > 0 && flags.Arg(0) == "ports" {
@@ -206,6 +207,21 @@ func run(args []string) error {
 		return err
 	}
 }
+
+// defaultCommandSocket is the state directory's command.sock. For the
+// default state directory a command (not the daemon) uses the packaged
+// service's /run/hub-net/command.sock on Linux when it's there.
+func defaultCommandSocket(stateDir string, client bool) string {
+	if filepath.Clean(stateDir) == filepath.Clean(config.DefaultStateDir()) && runtime.GOOS == "linux" && client {
+		if _, err := os.Stat(sharedCommandSocket); err == nil {
+			return sharedCommandSocket
+		}
+	}
+	return filepath.Join(stateDir, "command.sock")
+}
+
+// sharedCommandSocket is where the packaged Linux service listens for commands
+const sharedCommandSocket = "/run/hub-net/command.sock"
 
 // showApprovalCode prints the safety code while the Hub holds a join for an
 // owner's approval, asking the daemon about it every second until stopped.

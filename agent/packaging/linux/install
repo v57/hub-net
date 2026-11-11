@@ -26,3 +26,6 @@ install -m 0644 "$script_dir/hub-net.polkit.rules" /usr/share/polkit-1/rules.d/5
 systemd-sysusers /usr/lib/sysusers.d/hub-net.conf
 systemd-tmpfiles --create /usr/lib/tmpfiles.d/hub-net.conf
 systemctl daemon-reload
+if [ -n "${SUDO_USER:-}" ] && [ "$SUDO_USER" != root ] && ! id -nG "$SUDO_USER" | tr ' ' '\n' | grep -qx hub-net; then
+  echo "To use Hub Network from the Hub app as $SUDO_USER: sudo usermod -aG hub-net $SUDO_USER, then sign in again"
+fi
