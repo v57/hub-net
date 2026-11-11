@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"sort"
 	"strconv"
+
+	"github.com/v57/hub-net/fsutil"
 )
 
 const Version = 1
@@ -77,12 +79,7 @@ func Save(path string, entries []Entry) error {
 	if err != nil {
 		return fmt.Errorf("publications: atomic save: %w", err)
 	}
-	directory, err := os.Open(filepath.Dir(path))
-	if err == nil {
-		err = directory.Sync()
-		_ = directory.Close()
-	}
-	return err
+	return fsutil.SyncDir(filepath.Dir(path))
 }
 
 func validate(entries []Entry) error {

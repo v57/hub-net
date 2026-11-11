@@ -12,6 +12,7 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 
@@ -164,8 +165,9 @@ func TestThePresenceSecretStaysInAFileOnlyTheOwnerReads(t *testing.T) {
 	if !bytes.Equal(a.loadPresenceSecret(), secret) {
 		t.Fatal("not read back")
 	}
-	info, err := os.Stat(a.presenceSecretPath())
-	if err != nil || info.Mode().Perm() != 0o600 {
+	// Windows has no mode bits: the daemon makes the state directory private
+	// (SYSTEM and Administrators only), which the file inherits.
+	if info, err := os.Stat(a.presenceSecretPath()); err != nil || runtime.GOOS != "windows" && info.Mode().Perm() != 0o600 {
 		t.Fatalf("mode = %v, %v", info, err)
 	}
 	// A Hub with no secret: the device goes back to answering everyone, and the file goes

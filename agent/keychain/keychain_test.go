@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/v57/hub-net-node/identity"
@@ -22,7 +23,7 @@ func TestIdentityStorageLoadOrGenerateCreates(t *testing.T) {
 	if !store.Exists() {
 		t.Fatalf("identity file not created")
 	}
-	if mode := mustMode(t, path); mode != 0o600 {
+	if mode := mustMode(t, path); runtime.GOOS != "windows" && mode != 0o600 {
 		t.Fatalf("identity mode = %v, want 0600", mode)
 	}
 	second, err := store.LoadOrGenerate()
@@ -71,7 +72,7 @@ func TestWireGuardStorageLoadOrGenerateCreates(t *testing.T) {
 	if len(first) != PrivateKeyLength {
 		t.Fatalf("key length = %d, want %d", len(first), PrivateKeyLength)
 	}
-	if mode := mustMode(t, path); mode != 0o600 {
+	if mode := mustMode(t, path); runtime.GOOS != "windows" && mode != 0o600 {
 		t.Fatalf("wireguard mode = %v, want 0600", mode)
 	}
 	second, err := store.LoadOrGenerate()
@@ -97,7 +98,7 @@ func TestWireGuardStorageRotateChangesKey(t *testing.T) {
 	if bytes.Equal(original, rotated) {
 		t.Fatalf("Rotate returned same key")
 	}
-	if mode := mustMode(t, path); mode != 0o600 {
+	if mode := mustMode(t, path); runtime.GOOS != "windows" && mode != 0o600 {
 		t.Fatalf("wireguard mode after rotate = %v, want 0600", mode)
 	}
 }

@@ -14,6 +14,8 @@ import (
 	"sort"
 	"strings"
 	"sync"
+
+	"github.com/v57/hub-net/fsutil"
 )
 
 const Version = 1
@@ -581,12 +583,7 @@ func atomicJSON(path string, value any, mode os.FileMode) error {
 	if err := os.Rename(temp, path); err != nil {
 		return err
 	}
-	dir, err := os.Open(filepath.Dir(path))
-	if err != nil {
-		return err
-	}
-	defer dir.Close()
-	return dir.Sync()
+	return fsutil.SyncDir(filepath.Dir(path))
 }
 
 func copyPrivate(source, target string) error {

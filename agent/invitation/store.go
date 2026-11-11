@@ -12,6 +12,7 @@ import (
 	"reflect"
 	"sync"
 
+	"github.com/v57/hub-net/fsutil"
 	"github.com/v57/hub-net/hubalias"
 )
 
@@ -242,12 +243,7 @@ func atomicWriteJSON(path string, value any, mode os.FileMode) error {
 	if err := os.Rename(temporaryPath, path); err != nil {
 		return err
 	}
-	directory, err := os.Open(filepath.Dir(path))
-	if err != nil {
-		return err
-	}
-	defer directory.Close()
-	return directory.Sync()
+	return fsutil.SyncDir(filepath.Dir(path))
 }
 
 func nextAlias(name string, records []storedMembership) string {
