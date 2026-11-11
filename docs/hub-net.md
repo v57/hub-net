@@ -40,8 +40,10 @@ sudo systemctl enable --now hub-net
 
 The unit runs the agent as the `hub-net` user with only `CAP_NET_ADMIN` and `CAP_NET_RAW`, state in
 `/var/lib/hub-net` (mode 0700) and runtime files in `/run/hub-net`. The agent checks those capabilities before it
-creates an identity or talks to a Hub, and exits if they are missing. Details, update and uninstall:
-[`agent/packaging/linux/README.md`](../agent/packaging/linux/README.md).
+creates an identity or talks to a Hub, and exits if they are missing. The command socket is
+`/run/hub-net/command.sock`, `0660` in the `hub-net` group: add yourself to the group
+(`sudo usermod -aG hub-net $USER`, then sign in again) to run `hub-net list` or the Hub app without `sudo`. Details,
+update and uninstall: [`agent/packaging/linux/README.md`](../agent/packaging/linux/README.md).
 
 For a container, build `agent/Dockerfile` from the Hub workspace root. It needs `NET_ADMIN` and `NET_RAW` and keeps
 its state in the `/var/lib/hub-net` volume.
@@ -109,8 +111,8 @@ The daemon reads flags only; there is no configuration file for the command.
 | Flag | Default | Meaning |
 |---|---|---|
 | `-state-dir` | `/var/lib/hub-net` (Linux, macOS), `%ProgramData%\hub-net` (Windows) | Memberships, keys, the port list, the command socket. |
-| `-socket` | `<state-dir>/command.sock` | The command socket. The CLI uses the same flag to find it. |
-| `-socket-group` | none | Makes the command socket `0660` in this group, e.g. for the Hub app on Linux. |
+| `-socket` | `<state-dir>/command.sock`; `\\.\pipe\hub-net-command` on Windows with the default state directory | The command socket. The CLI uses the same flag to find it, and on Linux falls back to the packaged service's `/run/hub-net/command.sock`. |
+| `-socket-group` | none | Makes the command socket `0660` in this group (on Windows, grants the group the pipe), e.g. for the Hub app. |
 | `-dns-listen` | `127.0.0.1:0` | Loopback UDP address of the `.hub.invalid` resolver. |
 | `-bootstrap-listen` | `:0` | UDP address of the invitation bootstrap listener (only the Hub's local agent uses it). |
 | `-advertise-address` | none | Address joiners use to reach the bootstrap listener and WireGuard port, for a host behind port forwarding. |
@@ -148,8 +150,8 @@ it a peer link grant. The Hub side of this (grants, `hub/net/*`, revocation) is 
 | WireGuard | UDP 51820 | Per interface. |
 | Bootstrap listener | `-bootstrap-listen`, ephemeral by default | Hub's local agent only; joiners learn it through the node. |
 | DNS resolver | `-dns-listen`, loopback | Only `.hub.invalid` queries are routed to it. |
-| Command socket | `<state-dir>/command.sock` | [ipc.md](ipc.md#command-socket) |
-| Service socket | `/run/hub-net/agent.sock` (Linux), `/var/run/hub-net/agent.sock` (macOS) | [ipc.md](ipc.md#service-socket) |
+| Command socket | `<state-dir>/command.sock`, `/run/hub-net/command.sock` (Linux package), `\\.\pipe\hub-net-command` (Windows) | [ipc.md](ipc.md#command-socket) |
+| Service socket | `/run/hub-net/agent.sock` (Linux), `/var/run/hub-net/agent.sock` (macOS), `\\.\pipe\hub-net-agent` (Windows) | [ipc.md](ipc.md#service-socket) |
 
 The agent installs routes only for `100.96.0.0/11` and `fd48:5542:4e45::/48` and refuses to start a membership when
 another route already covers them. Every Hub assigns from the same ranges, so two Hubs can hand out overlapping
@@ -223,10 +225,10 @@ The full matrix and safety rules are in [`PLATFORMS.md`](../PLATFORMS.md). Today
 
 | Platform | Status |
 |---|---|
-| Linux | Supported: kernel WireGuard over netlink, nftables, systemd-resolved, systemd packaging. Tested on Ubuntu amd64 and in the colima acceptance run. |
+| Linux | Supported: kernel WireGuard over netlink, nftables, systemd-resolved, systemd packaging. Tested on Ubuntu amd64, in the colima acceptance run, and with the package on Ubuntu 24.04 arm64 joined to a test hub, reaching a shared app on another member and reached by it. |
 | macOS | The Go agent builds, but its startup check fails: there's no Go tunnel adapter. Macs use the Hub app's Network Extension. |
 | iOS, iPadOS | Not this agent: the Hub app's Network Extension. |
-| Windows | Planned. Builds; startup check fails. Not supported until WireGuardNT, named-pipe ACLs, routes, DNS (NRPT) and rollback pass. |
+| Windows | Planned, not supported yet. Passing on Windows 11 arm64: channel-go's WSAPoll poller, the unit suites, the named-pipe ACLs, split DNS through NRPT, the port list through WFP, and the service's install, start, stop and uninstall ([`agent/packaging/windows/README.md`](../agent/packaging/windows/README.md)). Not yet run: the WireGuardNT adapter with its routes and rollback, and a join. |
 | Android, FreeBSD | Not supported. |
 
 On every platform without a backend, operations fail closed (`ErrPlatformUnsupported`) instead of running without

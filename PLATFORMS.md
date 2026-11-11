@@ -6,9 +6,9 @@ scoped routes, split DNS, local IPC, rollback, and packaging tests pass.
 
 | Platform | Initial status | WireGuard integration | Required privilege | Local service IPC | DNS integration |
 | --- | --- | --- | --- | --- | --- |
-| Linux | Supported target | Kernel WireGuard through netlink; userspace `wireguard-go` may be an explicit fallback | `CAP_NET_ADMIN` and `CAP_NET_RAW`, normally via a system service | Unix socket at `/run/hub-net/agent.sock`, mode `0660`, owner `root`, group `hub-net` | `systemd-resolved` routing domain for `hub.invalid`; adapter must restore prior configuration |
+| Linux | Supported target | Kernel WireGuard through netlink; userspace `wireguard-go` may be an explicit fallback | `CAP_NET_ADMIN` and `CAP_NET_RAW`, normally via a system service | Unix socket at `/run/hub-net/agent.sock`, mode `0660`, owner `root`, group `hub-net`; commands at `/run/hub-net/command.sock`, mode `0660`, group `hub-net` | `systemd-resolved` routing domain for `hub.invalid`; adapter must restore prior configuration |
 | macOS 13+ | Supported target | Userspace WireGuard tunnel through a separately privileged system component | Root launch daemon for interface, route, and resolver changes | Unix socket at `/var/run/hub-net/agent.sock`, mode `0660`, restricted group | Scoped resolver file/configuration for `hub.invalid`; no default DNS capture |
-| Windows 11 / Server 2022+ | Planned, not initially supported | WireGuardNT service adapter | Elevated Windows service and tunnel-management ACL | Named pipe `\\.\pipe\hub-net-agent` with an explicit service/user DACL | NRPT rule limited to `.hub.invalid` | 
+| Windows 11 / Server 2022+ | Planned, not supported yet (see below) | WireGuardNT service adapter | Elevated Windows service (LocalSystem) | Named pipe `\\.\pipe\hub-net-agent` with an explicit service/user DACL; commands at `\\.\pipe\hub-net-command` | NRPT rule limited to `.hub.invalid`, resolver on `127.72.x.y:53` |
 | Apple app profiles | Separate native target | Network Extension plus WireGuardKit; not the Go agent | Network Extension entitlement and user-approved VPN configuration | App-group IPC defined by Hub App | `NEDNSSettings` match domain |
 | FreeBSD, Android, other Unix | Unsupported in v1 | No approved adapter | N/A | N/A | N/A |
 
@@ -28,4 +28,12 @@ scoped routes, split DNS, local IPC, rollback, and packaging tests pass.
 - Windows support remains disabled until `channel-go` has a working Windows
   poller and the WireGuardNT, named-pipe ACL, route, DNS, and rollback suites
   pass. Documentation and binaries must not claim Windows support earlier.
+  On Windows 11 arm64 these pass: the `channel-go` WSAPoll poller and its
+  client and server tests, the named-pipe ACL suite (protected DACL, first
+  instance, remote clients rejected), split DNS through NRPT (resolution
+  through the system resolver, removal on close, a crash's leftover rule
+  replaced), the WFP port-list lifecycle, and the service's install, start,
+  stop and uninstall. Still to run: the WireGuardNT adapter lifecycle with its
+  routes (`HUBNET_WG_TEST=1`, needs `wireguard.dll`), rollback of a running
+  membership, and a join to a Hub.
 

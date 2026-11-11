@@ -23,9 +23,18 @@ app run by a group member can send commands too. The socket's directory must let
 hub-net -socket /run/hub-net/command.sock -socket-group hub-net
 ```
 
-The Hub app on Linux looks for `/run/hub-net/command.sock`, then `/var/lib/hub-net/command.sock`;
-`HUB_NET_COMMAND_SOCKET` names another. The CLI takes the same `-socket` flag, before the command:
-`hub-net -socket /run/hub-net/command.sock list`.
+The packaged Linux service runs with exactly these flags, so a user in the `hub-net` group drives it. The Hub app on
+Linux looks for `/run/hub-net/command.sock`, then `/var/lib/hub-net/command.sock`; `HUB_NET_COMMAND_SOCKET` names
+another. The CLI takes the same `-socket` flag, before the command: `hub-net -socket /run/hub-net/command.sock list`.
+Without it, a command run with the default state directory uses `/run/hub-net/command.sock` when that exists.
+
+On Windows the command socket is a named pipe, `\\.\pipe\hub-net-command` with the default state directory (the Hub
+app uses the same name). Its DACL is protected and admits SYSTEM, Administrators (elevated), the agent's own user,
+and the `-socket-group` group with read and write; the agent creates the pipe's first instance itself, so a pipe
+another process made first is refused, and remote clients are rejected. A `-socket` path that isn't a pipe name maps
+to `\\.\pipe\hub-net-<file name>-<hash of the directory>`. The service socket is a pipe the same way, with the
+caller's token in place of the peer uid: SYSTEM and Administrators count as root, a token that can't be read is
+refused.
 
 ### Request
 
