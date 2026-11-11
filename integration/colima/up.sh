@@ -39,7 +39,7 @@ hub=${HUB_WORKSPACE:-$(cd "$(git -C "$repo" rev-parse --path-format=absolute --g
 mkdir -p "$here/bin"
 gowork=$here/bin/go.work
 cat > "$gowork" <<GOWORK
-go 1.25.0
+go 1.26.0
 use $repo/agent
 replace github.com/v57/channel-go => ${HUBNET_CHANNEL_GO:-$hub/Channel/channel-go}
 replace github.com/v57/hub-net-node => $hub/Network/hub-net-node
