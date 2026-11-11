@@ -39,8 +39,10 @@ VMs; the Mac is `.1` on that subnet.
 Checks: traffic both ways and hub-server (`:1997`) over the overlay; single-use
 invitation; ports stay closed (agent-local port grants are retired:
 `net/ports/update` is refused and opens nothing); `net/users` lists the
-joiner; members cannot reach each other; restart of the joiner daemon, the
-owner daemon and hub-server; revoke (`net/revoke`, then `hub/device/revoke` of the
+joiner; members cannot reach each other; a port the joiner shares (`hub-net open 8080 owner`)
+is closed until shared and then reached by the owner; restart of the joiner daemon, the
+owner daemon and hub-server, after each of which the owner reaches that share again (a restart
+drops the firewall table, as a reboot does); revoke (`net/revoke`, then `hub/device/revoke` of the
 second member's device); leave. Agents join as devices: hub-server keys each
 member `device:<id>`.
 

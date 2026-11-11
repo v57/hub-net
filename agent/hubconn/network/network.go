@@ -139,6 +139,9 @@ type Options struct {
 // Publisher manages declared network shares, local-agent attestation, and Hub
 // share replacement.
 type Publisher struct {
+	// syncMu orders the synchronizations: each sends what is declared once it
+	// holds it, so a republish that is retried never undoes a newer change.
+	syncMu              sync.Mutex
 	mu                  sync.Mutex
 	shares              map[string]Share
 	publicationsByShare map[string]Publication
@@ -223,6 +226,8 @@ func (p *Publisher) Publication(name string) (Publication, bool) {
 // Publish records the share and synchronizes with Hub, returning the new
 // overlay publications. On failure the previously declared share is restored.
 func (p *Publisher) Publish(ctx context.Context, share Share, serviceKey string, signer Signer, sender Sender) ([]Publication, error) {
+	p.syncMu.Lock()
+	defer p.syncMu.Unlock()
 	p.mu.Lock()
 	previous, existed := p.shares[share.Name]
 	p.shares[share.Name] = share
@@ -244,6 +249,8 @@ func (p *Publisher) Publish(ctx context.Context, share Share, serviceKey string,
 // Remove deletes a declared share and synchronizes with Hub. On failure the
 // share is restored.
 func (p *Publisher) Remove(ctx context.Context, name, serviceKey string, signer Signer, sender Sender) ([]Publication, error) {
+	p.syncMu.Lock()
+	defer p.syncMu.Unlock()
 	p.mu.Lock()
 	removed, existed := p.shares[name]
 	if !existed {
@@ -264,6 +271,8 @@ func (p *Publisher) Remove(ctx context.Context, name, serviceKey string, signer 
 
 // Republish re-synchronizes all declared shares with Hub. Called on reconnect.
 func (p *Publisher) Republish(ctx context.Context, serviceKey string, signer Signer, sender Sender) ([]Publication, error) {
+	p.syncMu.Lock()
+	defer p.syncMu.Unlock()
 	return p.synchronize(ctx, serviceKey, signer, sender)
 }
 
@@ -290,7 +299,8 @@ func (p *Publisher) BuildReplacePayloadForTest(shares []Share, provider Attestat
 }
 
 // synchronize obtains attestations for each declared share, sends
-// network/shares/replace to Hub, and stores the returned publications.
+// network/shares/replace to Hub, and stores the returned publications. The
+// caller holds syncMu.
 func (p *Publisher) synchronize(ctx context.Context, serviceKey string, signer Signer, sender Sender) ([]Publication, error) {
 	shares := p.Declared()
 	wireShares := make([]protocol.NetworkShare, 0, len(shares))

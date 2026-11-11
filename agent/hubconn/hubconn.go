@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"sync"
 	"time"
 
@@ -23,6 +24,17 @@ import (
 const (
 	// republishTimeout bounds the share republish after a reconnect.
 	republishTimeout = 30 * time.Second
+)
+
+// The Hub refuses shares while the agent that fronts them isn't connected: on
+// a reconnect the agent's own shares go before it registers, and after a Hub
+// restart a service can come back before its agent. A refused republish is
+// tried again, first after republishRetryFirst and then twice as late each
+// time up to republishRetryMax, for republishRetryFor.
+var (
+	republishRetryFirst = time.Second
+	republishRetryMax   = 30 * time.Second
+	republishRetryFor   = 2 * time.Minute
 )
 
 var (
@@ -53,8 +65,11 @@ type Options struct {
 	// NetworkOptions configures share publication (agent socket, timeouts).
 	NetworkOptions network.Options
 	// OnConnect runs after every (re)connect, once the service is registered
-	// and its shares are republished.
+	// and its shares are republished, or, when the Hub refused them, while
+	// they are tried again.
 	OnConnect func(sender *channelgo.Sender)
+	// Logger reports shares the Hub refused on a reconnect. Nil logs nothing.
+	Logger *slog.Logger
 }
 
 // Permissions is the Hub permission an API requires.
@@ -75,9 +90,13 @@ type Service struct {
 	svc      *hubservice.Service
 	identity *identity.Identity
 	network  *network.Publisher
+	logger   *slog.Logger
 
 	mu      sync.Mutex
 	started bool
+	// connects counts the connections, so a republish being retried stops
+	// once a newer connection republishes on its own.
+	connects uint64
 }
 
 // New creates a Service; Start connects it.
@@ -86,7 +105,11 @@ func New(options Options) (*Service, error) {
 	if id == nil {
 		return nil, errNoIdentity
 	}
-	s := &Service{identity: id, network: network.New(options.NetworkOptions)}
+	logger := options.Logger
+	if logger == nil {
+		logger = slog.New(slog.DiscardHandler)
+	}
+	s := &Service{identity: id, network: network.New(options.NetworkOptions), logger: logger}
 	onConnect := options.OnConnect
 	instance := options.Instance
 	if instance == "" {
@@ -282,8 +305,13 @@ func (s *Service) RemoveShare(ctx context.Context, name string) ([]network.Publi
 // Network is the share publisher.
 func (s *Service) Network() *network.Publisher { return s.network }
 
-// republish sends the declared shares again after a reconnect.
+// republish sends the declared shares again after a reconnect. When that
+// fails it keeps trying in the background while this connection lasts.
 func (s *Service) republish(sender *channelgo.Sender) {
+	s.mu.Lock()
+	s.connects++
+	connect := s.connects
+	s.mu.Unlock()
 	if !s.network.HasShares() {
 		return
 	}
@@ -291,7 +319,39 @@ func (s *Service) republish(sender *channelgo.Sender) {
 	if err != nil {
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), republishTimeout)
-	defer cancel()
-	_, _ = s.network.Republish(ctx, serviceKey, s.identity, sender)
+	attempt := func() error {
+		ctx, cancel := context.WithTimeout(context.Background(), republishTimeout)
+		defer cancel()
+		_, err := s.network.Republish(ctx, serviceKey, s.identity, sender)
+		return err
+	}
+	if err = attempt(); err == nil {
+		return
+	}
+	s.logger.Info("shares not republished yet, trying again", slog.String("err", err.Error()))
+	current := func() bool {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		return s.started && s.connects == connect
+	}
+	go func() {
+		delay := republishRetryFirst
+		deadline := time.Now().Add(republishRetryFor)
+		for {
+			time.Sleep(delay)
+			if !current() {
+				return
+			}
+			err := attempt()
+			if err == nil {
+				s.logger.Info("shares republished")
+				return
+			}
+			if time.Now().After(deadline) {
+				s.logger.Warn("shares not republished", slog.String("err", err.Error()))
+				return
+			}
+			delay = min(delay*2, republishRetryMax)
+		}
+	}()
 }

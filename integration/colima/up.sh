@@ -255,21 +255,34 @@ check_eventually "second member reaches hub-server" hn-other nc -z -w3 "$owner_i
 refute "port 8080 stays closed for the second member" hn-other nc -z -w3 "$owner_ip" 8080
 refute "members cannot reach each other directly" hn-other ping -c1 -W2 "$joiner_ip"
 
+say "--- a member's share"
+D exec -d hn-joiner sh -c 'while true; do echo hello | nc -l -N 8080 >/dev/null 2>&1; done'
+sleep 1
+refute "the joiner's 8080 is closed until it shares it" hn-owner nc -z -w3 "$joiner_ip" 8080
+D exec hn-joiner hub-net -state-dir /var/lib/hub-net open 8080 owner >/dev/null
+check_eventually "hub-net open 8080: the owner reaches the joiner's share" hn-owner nc -z -w3 "$joiner_ip" 8080
+
 say "--- restarts"
+# The firewall table outlives the daemon until the machine reboots, which drops it (Windows drops its filters when the
+# service stops): drop it too, so what the restarted agent installs is all that's open
 restart_daemon() {
   D exec "$1" pkill -x hub-net || true
   sleep 1
+  D exec "$1" sh -c 'nft delete table inet hub_net 2>/dev/null; true'
   start_daemon "$1"
 }
 restart_daemon hn-joiner
 check_eventually "joiner daemon restart: hub-server reachable again" hn-joiner nc -z -w3 "$owner_ip" 1997
+check_eventually "joiner daemon restart: the owner reaches the joiner's share again" hn-owner nc -z -w3 "$joiner_ip" 8080
 restart_daemon hn-owner
 check_eventually "owner daemon restart: joiner reaches hub-server" hn-joiner nc -z -w3 "$owner_ip" 1997
 check_eventually "owner daemon restart: owner reaches joiner" hn-owner ping -c1 -W2 "$joiner_ip"
+check_eventually "owner daemon restart: the owner reaches the joiner's share" hn-owner nc -z -w3 "$joiner_ip" 8080
 if [[ -n $swift_hub ]]; then stop_swift_hub; else D exec hn-owner pkill -x bun || true; fi
 start_hub
 check_eventually "hub-server restart: joiner reconnects" hn-joiner sh -c "hub-net -state-dir /var/lib/hub-net list | grep -q connected && nc -z -w3 $owner_ip 1997"
 check_eventually "hub-server restart: owner reaches joiner" hn-owner ping -c1 -W2 "$joiner_ip"
+check_eventually "hub-server restart: the owner reaches the joiner's share" hn-owner nc -z -w3 "$joiner_ip" 8080
 check_eventually "after restarts: second member reaches hub-server" hn-other nc -z -w3 "$owner_ip" 1997
 
 say "--- revoke and leave"

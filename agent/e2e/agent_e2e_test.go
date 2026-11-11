@@ -24,6 +24,7 @@ import (
 	servicenetwork "github.com/v57/hub-net/hubconn/network"
 	"github.com/v57/hub-net/localsock"
 	"github.com/v57/hub-net/profile"
+	"github.com/v57/hub-net/publications"
 	"github.com/v57/hub-net/wireguard"
 )
 
@@ -55,6 +56,13 @@ func startAgent(t *testing.T, hubPort int, name string) *agentSide {
 // same identity and WireGuard key files.
 func startAgentWithState(t *testing.T, hubPort int, name, stateDir string, configure ...func(*config.Config)) *agentSide {
 	t.Helper()
+	return startAgentWithOptions(t, hubPort, name, stateDir, nil, configure...)
+}
+
+// startAgentWithOptions is startAgentWithState with a change to the agent's
+// options (its persisted shares, say).
+func startAgentWithOptions(t *testing.T, hubPort int, name, stateDir string, options func(*hubnet.Options), configure ...func(*config.Config)) *agentSide {
+	t.Helper()
 	cfg := config.Defaults()
 	cfg.StateDir = stateDir
 	cfg.IdentityPath = cfg.StateDir + "/" + config.DefaultIdentityFile
@@ -68,13 +76,17 @@ func startAgentWithState(t *testing.T, hubPort int, name, stateDir string, confi
 	}
 
 	backend := &enforcement.MemoryBackend{}
-	agent, err := hubnet.New(hubnet.Options{
+	agentOptions := hubnet.Options{
 		Config:             cfg,
 		Adapter:            wireguard.NewFakeAdapter(),
 		CandidateChecker:   alwaysOKCandidateAgent{},
 		HandshakeChecker:   alwaysOKHandshakeAgent{},
 		EnforcementBackend: backend,
-	})
+	}
+	if options != nil {
+		options(&agentOptions)
+	}
+	agent, err := hubnet.New(agentOptions)
 	if err != nil {
 		t.Fatalf("%s New: %v", name, err)
 	}
@@ -599,6 +611,44 @@ func TestAgentE2EProcessRestartRecovery(t *testing.T) {
 	if got := hub.RegistrationCount(beforeKey); got != 2 {
 		t.Fatalf("registration count after process restart = %d, want 2", got)
 	}
+}
+
+// TestAgentE2EOwnSharesPublishedAfterRegistration: the agent's own shares
+// (`hub-net open`) go to the Hub on connect, before the agent registers, and
+// the Hub refuses a share whose agent isn't registered. The agent keeps trying
+// until they're published, on its first connect and after a restart, so the
+// Hub's machine reaches them again (a restarted member's share stayed closed).
+func TestAgentE2EOwnSharesPublishedAfterRegistration(t *testing.T) {
+	hub, err := NewTestHub()
+	if err != nil {
+		t.Fatalf("NewTestHub: %v", err)
+	}
+	defer hub.Close()
+
+	shares := func(options *hubnet.Options) {
+		options.InitialShares = []publications.Entry{{Name: "port-8080-tcp", Protocol: "tcp", Host: "127.0.0.1", Port: 8080}}
+	}
+	stateDir := t.TempDir()
+	waitPublished := func(side *agentSide, label string, want int) {
+		t.Helper()
+		key := providerKey(t, side)
+		deadline := time.Now().Add(10 * time.Second)
+		for time.Now().Before(deadline) {
+			if _, ok := side.agent.HubService().Network().Publication("port-8080-tcp"); ok && hub.ShareReplaceCount(key) >= want {
+				return
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+		t.Fatalf("%s: share not published (hub replaces %d, want %d)", label, hub.ShareReplaceCount(key), want)
+	}
+	first := startAgentWithOptions(t, hub.Port(), "own-shares", stateDir, shares)
+	first.waitRegistered(t, "own-shares-first")
+	waitPublished(first, "first connect", 1)
+	first.stopAgent(t, "own-shares-first")
+
+	restarted := startAgentWithOptions(t, hub.Port(), "own-shares", stateDir, shares)
+	restarted.waitRegistered(t, "own-shares-restarted")
+	waitPublished(restarted, "after a restart", 2)
 }
 
 // TestAgentE2EManualTCPUDPServiceRepublishesAfterHubRestart covers HN-706's

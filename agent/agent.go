@@ -480,6 +480,7 @@ func (a *Agent) Run(ctx context.Context) (err error) {
 		NetworkOptions: network.Options{
 			AgentSocket: a.config.AgentSocketPath,
 		},
+		Logger: a.logger,
 		OnConnect: func(sender *channelgo.Sender) {
 			if a.registrar == nil {
 				return
