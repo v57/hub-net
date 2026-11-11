@@ -216,10 +216,37 @@ func TestWindowsAdapterLifecycle(t *testing.T) {
 	if err := adopted.Down(); err != nil {
 		t.Fatalf("Down: %v", err)
 	}
-	if _, ok := luidOf(t, "hubnet-test-a"); ok {
-		t.Fatal("adapter still present after Down")
+	waitGone(t, "hubnet-test-a", luid)
+
+	// Up again at once, as a restarted membership does: same name and GUID.
+	again := NewPlatformAdapter("hubnet-test-a")
+	if err := again.Up(InterfaceConfig{Name: "hubnet-test-a", PrivateKey: privA, Address: addrA, ListenPort: 51901}); err != nil {
+		t.Fatalf("Up after Down: %v", err)
 	}
-	if hasOverlayRoute(t, luid) {
-		t.Fatal("overlay route left after Down")
+	luid, ok = luidOf(t, "hubnet-test-a")
+	if !ok || !hasOverlayRoute(t, luid) {
+		t.Fatal("adapter or route missing after the second Up")
+	}
+	if err := again.Down(); err != nil {
+		t.Fatalf("second Down: %v", err)
+	}
+	waitGone(t, "hubnet-test-a", luid)
+}
+
+// waitGone waits for Windows to remove a closed adapter and its routes, which
+// it does shortly after the last handle closes.
+func waitGone(t *testing.T, name string, luid winipcfg.LUID) {
+	t.Helper()
+	start := time.Now()
+	for {
+		_, present := luidOf(t, name)
+		if !present && !hasOverlayRoute(t, luid) {
+			t.Logf("%s gone %v after Down", name, time.Since(start).Round(time.Millisecond))
+			return
+		}
+		if time.Since(start) > 15*time.Second {
+			t.Fatalf("%s still present (adapter %v) 15s after Down", name, present)
+		}
+		time.Sleep(100 * time.Millisecond)
 	}
 }
