@@ -228,7 +228,7 @@ The full matrix and safety rules are in [`PLATFORMS.md`](../PLATFORMS.md). Today
 | Linux | Supported: kernel WireGuard over netlink, nftables, systemd-resolved, systemd packaging. Tested on Ubuntu amd64, in the colima acceptance run, and with the package on Ubuntu 24.04 arm64 joined to a test hub, reaching a shared app on another member and reached by it. |
 | macOS | The Go agent builds, but its startup check fails: there's no Go tunnel adapter. Macs use the Hub app's Network Extension. |
 | iOS, iPadOS | Not this agent: the Hub app's Network Extension. |
-| Windows | Planned, not supported yet. Passing on Windows 11 arm64: channel-go's WSAPoll poller, the unit suites, the named-pipe ACLs, split DNS through NRPT, the port list through WFP, and the service's install, start, stop and uninstall ([`agent/packaging/windows/README.md`](../agent/packaging/windows/README.md)). Not yet run: the WireGuardNT adapter with its routes and rollback, and a join. |
+| Windows | Supported on Windows 11 arm64 (amd64 and Windows Server untested): WireGuardNT (wireguard-nt 0.10.1), WFP for the port list, NRPT for split DNS, a LocalSystem service, named pipes. Checked on a Windows 11 arm64 VM joined to a test hub, reaching a shared app on the hub's machine and reached by it; rollback on stop, leave and crash. Install: [`agent/packaging/windows/README.md`](../agent/packaging/windows/README.md). IPv4 rendezvous probe only. |
 | Android, FreeBSD | Not supported. |
 
 On every platform without a backend, operations fail closed (`ErrPlatformUnsupported`) instead of running without
@@ -287,7 +287,7 @@ go test -race ./...         # what runs on any platform
 go vet ./...
 ```
 
-`enforcement`, `wireguard` and parts of `dnsresolver` build only on Linux. From a Mac, run the whole suite in a
+`enforcement`, `wireguard` and `dnsresolver` have Linux and Windows backends that don't run on a Mac. From a Mac, run the whole suite in a
 Linux container with the whole Hub workspace mounted, since the module's `replace` directives point into it (the
 colima profile from the acceptance run, or any Docker). From `agent/`:
 
@@ -302,6 +302,10 @@ Privileged checks run on a disposable Linux host as root:
 | `sudo make integration-multi-hub-linux` | Several Hubs with overlapping overlays: translation, DNS and node isolation, restart, leave, `removeAll`. |
 | `sudo make integration-linux-package` | Package build, file modes, systemd hardening, upgrade, downgrade, uninstall without key loss. |
 | `sudo make integration-machine-restart-prepare`, reboot, `...-verify` | Identity and keys survive a reboot. |
+
+On Windows, cross-compile each package's tests (`GOOS=windows go test -c`) and run them on a disposable Windows
+11 machine. The privileged suites run from an elevated shell: `HUBNET_WG_TEST=1` (the WireGuardNT adapter;
+`wireguard.dll` next to the test binary), `HUBNET_DNS_TEST=1` (NRPT) and `HUBNET_WFP_TEST=1` with `HUBNET_WFP_IFACE` naming an adapter (WFP).
 
 The end-to-end run with a real hub-server, node and three agents in containers is
 [`integration/colima`](../integration/colima/README.md) (`./up.sh`). `agent/e2e` and `wireguard.NewFakeAdapter`,

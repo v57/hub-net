@@ -1,15 +1,13 @@
 # hub-net on Windows
 
-hub-net runs on Windows 11 and Windows Server 2022 or later (amd64 and arm64) as a LocalSystem service
-with WireGuardNT. The package holds `hub-net.exe`; WireGuardNT's `wireguard.dll` for the same
+hub-net runs on Windows 11 (arm64 checked; amd64 and Windows Server 2022 or later build but are untested) as a
+LocalSystem service with WireGuardNT. The package holds `hub-net.exe`; WireGuardNT's `wireguard.dll` for the same
 architecture goes next to it, from the official signed release (`wireguard-nt-<version>.zip` on
 <https://download.wireguard.com/wireguard-nt/>, `bin\<arch>\wireguard.dll`).
 
-> **Status: not supported yet.** On Windows 11 arm64 the service installs, starts, serves
-> `\\.\pipe\hub-net-command` with its DACL, stops and uninstalls; split DNS (NRPT), the port-list
-> filters (WFP) and the pipe ACLs pass their suites. The WireGuardNT adapter and its routes haven't run
-> against the driver yet, and no Windows device has joined a hub, so [`PLATFORMS.md`](../../../PLATFORMS.md)
-> still lists Windows as planned.
+Checked on Windows 11 arm64 with wireguard-nt 0.10.1: the adapter, NRPT, WFP and pipe suites pass, and the
+installed service joins a test hub, reaches a shared app on the hub's machine and is reached by it, and
+removes what it set up on stop, leave and crash ([`PLATFORMS.md`](../../../PLATFORMS.md)).
 
 ## Install
 
