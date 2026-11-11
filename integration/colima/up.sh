@@ -29,8 +29,22 @@
 set -euo pipefail
 
 here=$(cd "$(dirname "$0")" && pwd)
-# ~/Developer/Hub: hub-net, hub-net-node and hub-server are built from its clones.
-hub=$(cd "$here/../../../.." && pwd)
+# This checkout of hub-net (a worktree works too); the agent is built from it.
+repo=$(cd "$here/../.." && pwd)
+# ~/Developer/Hub: hub-net-node, hub-server, channel-go and hub-service-go come from its clones (the main checkout's
+# parent's parent, also from a worktree). HUB_WORKSPACE names another.
+hub=${HUB_WORKSPACE:-$(cd "$(git -C "$repo" rev-parse --path-format=absolute --git-common-dir)/../../.." && pwd)}
+# The agent's go.mod points its replace directives at sibling clones, which a worktree doesn't have: a go.work names
+# them in the workspace instead. HUBNET_CHANNEL_GO swaps in another channel-go checkout.
+mkdir -p "$here/bin"
+gowork=$here/bin/go.work
+cat > "$gowork" <<GOWORK
+go 1.25.0
+use $repo/agent
+replace github.com/v57/channel-go => ${HUBNET_CHANNEL_GO:-$hub/Channel/channel-go}
+replace github.com/v57/hub-net-node => $hub/Network/hub-net-node
+replace github.com/v57/hub-service-go => $hub/HubService/hub-service-go
+GOWORK
 context=${HUBNET_CONTEXT:-colima-hubnet}
 # The VM's address on the Mac's vmnet (--network-address); it can change when
 # the VM restarts.
@@ -70,8 +84,8 @@ fi
 
 say "building linux/arm64 binaries"
 mkdir -p "$bin"
-(cd "$hub/Network/hub-net/agent" && GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -o "$bin/hub-net" ./cmd/hub-net \
-  && GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -o "$bin/hubctl" ./integration/hubctl)
+(cd "$repo/agent" && export GOWORK=$gowork GOOS=linux GOARCH=arm64 CGO_ENABLED=0 && go build -o "$bin/hub-net" ./cmd/hub-net \
+  && go build -o "$bin/hubctl" ./integration/hubctl)
 (cd "$hub/Network/hub-net-node" && GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -o "$bin/hub-net-node" ./cmd/hub-net-node)
 if [[ -n $swift_hub ]]; then
   say "building hub-server-swift"
@@ -164,8 +178,30 @@ say "hn-owner: requesting an invitation"
 invite=$(D exec hn-owner hubctl -identity /state/owner.identity invite)
 say "invite: ${invite:0:48}..."
 
+# join_approved <host> <invitation>: hub-net join, with the owner approving the device once it waits. The hub's local
+# agent isn't an owner, so the hub holds the join until an owner approves the device (hub-server f9e4482); the joiner
+# shows the device's safety code, and the owner approves the waiting device only if the hub shows the same code.
+join_approved() {
+  local host=$1 code=$2
+  D exec "$host" rm -f /state/join.out /state/join.exit
+  D exec -d "$host" sh -c "hub-net -state-dir /var/lib/hub-net join '$code' > /state/join.out 2>&1; echo \$? > /state/join.exit"
+  # Read inside the container: the mounted state folder can lag on the Mac
+  wait_for "$host shows a code to approve" D exec "$host" sh -c "grep -q '^Code: ' /state/join.out || test -f /state/join.exit"
+  local shown
+  shown=$(D exec "$host" sed -n 's/^Code: \([0-9]* [0-9]*\) .*/\1/p' /state/join.out)
+  if [[ -n $shown ]] && D exec hn-owner hubctl -identity /state/owner.identity -timeout 30s approve-device "${host#hn-}" "$shown" >/dev/null; then
+    say "PASS $host showed the code the owner approved ($shown)"
+  else
+    say "FAIL $host: no waiting device with the code it shows (${shown:-none})"; failed=1
+  fi
+  wait_for "$host join" D exec "$host" test -f /state/join.exit
+  D exec "$host" sh -c "grep -v '^Code: \|^Waiting for an owner' /state/join.out" || true
+  return "$(D exec "$host" cat /state/join.exit)"
+}
+
+failed=0
 say "hn-joiner: hub-net join"
-D exec hn-joiner hub-net -state-dir /var/lib/hub-net join "$invite"
+join_approved hn-joiner "$invite"
 D exec hn-joiner hub-net -state-dir /var/lib/hub-net list
 
 owner_ip=$(D exec hn-owner sh -c "ip -4 -br addr show dev hubnet0" | awk '{print $3}' | cut -d/ -f1)
@@ -189,7 +225,6 @@ refute() {
   if D exec "$@" >/dev/null 2>&1; then say "FAIL $label"; failed=1; else say "PASS $label"; fi
 }
 agent() { D exec hn-owner hubctl -identity /state/owner.identity agent "$@"; }
-failed=0
 check_eventually "joiner -> owner ping" hn-joiner ping -c2 -W2 "$owner_ip"
 check_eventually "owner -> joiner ping" hn-owner ping -c2 -W2 "$joiner_ip"
 check_eventually "joiner -> hub-server :1997" hn-joiner nc -z -w3 "$owner_ip" 1997
@@ -213,7 +248,7 @@ fi
 
 say "--- second member"
 second_invite=$(D exec hn-owner hubctl -identity /state/owner.identity invite)
-D exec hn-other hub-net -state-dir /var/lib/hub-net join "$second_invite" >/dev/null
+join_approved hn-other "$second_invite"
 other_ip=$(D exec hn-other sh -c "ip -4 -br addr show dev hubnet0" | tr ' ' '\n' | grep '^100\.9[6-9]' | cut -d/ -f1 | head -1)
 say "second member $other_ip"
 check_eventually "second member reaches hub-server" hn-other nc -z -w3 "$owner_ip" 1997

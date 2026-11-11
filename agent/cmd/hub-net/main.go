@@ -80,7 +80,13 @@ func run(args []string) error {
 		if err != nil {
 			return err
 		}
-		response, err := management.NewClient(*socketPath).Execute(context.Background(), request)
+		client := management.NewClient(*socketPath)
+		stopStatus := func() {}
+		if request.Command == "join" {
+			stopStatus = showApprovalCode(client, request.Code)
+		}
+		response, err := client.Execute(context.Background(), request)
+		stopStatus()
 		if err != nil {
 			return err
 		}
@@ -207,6 +213,33 @@ func run(args []string) error {
 	}
 }
 
+// showApprovalCode prints the safety code while the Hub holds a join for an
+// owner's approval, asking the daemon about it every second until stopped.
+func showApprovalCode(client *management.Client, code string) (stop func()) {
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		shown := ""
+		ticker := time.NewTicker(time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+			}
+			response, err := client.Execute(ctx, management.Request{Version: management.Version, Command: "joinStatus", Code: code})
+			if err != nil || response.ApprovalCode == "" || response.ApprovalCode == shown {
+				continue
+			}
+			shown = response.ApprovalCode
+			fmt.Fprintf(os.Stderr, "Waiting for an owner of the hub to approve this device.\nCode: %s (approve it in Hub only if it shows the same code)\n", shown)
+		}
+	}()
+	return func() { cancel(); <-done }
+}
+
 // newJoin builds the daemon join command: it stages a fresh service + WireGuard
 // key pair per invitation, performs the direct bootstrap join, persists the
 // per-membership key material and the inviter peer, and returns the membership
@@ -246,6 +279,7 @@ func newJoin(store *membership.Store, stateDir, deviceKeyPath string, logger *sl
 			Code: code, Identity: id, WireGuardKey: wireGuardKey,
 			InterfaceName: interfaceName, Adapter: adapter, Logger: logger,
 			Device: device, Admit: joinAdmit(enforcement.PlatformSupported(), own),
+			OnApprovalCode: func(code string) { management.ReportApprovalCode(ctx, code) },
 		})
 		if err != nil {
 			return management.JoinResult{}, err

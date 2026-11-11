@@ -128,6 +128,10 @@ The daemon reads flags only; there is no configuration file for the command.
 3. The joiner sends a signed request straight to the inviter's bootstrap listener, gets a temporary WireGuard link to
    the Hub's machine, and binds to hub-server over it (`hub/net/bind`) with a fresh service key certified by the
    device key. The Hub assigns the overlay addresses.
+   When the invitation came from someone who isn't an owner (a member, or the Hub machine's own agent, which issues
+   every `hub-net local` invitation), the Hub holds the bind until an owner approves this device. `hub-net join` then
+   prints the device's safety code (`Code: 123 456`) and waits, up to the invitation's 10-minute admission; the owner
+   approves the device in the Hub app once it shows the same code.
 4. The daemon adopts the membership. Keys are staged per invitation, so a retried join reuses them instead of
    enrolling twice.
 

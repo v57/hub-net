@@ -52,11 +52,18 @@ type LocalFunc func(context.Context, string) (membership.Record, error)
 const DefaultLocalHubAddress = "ws://127.0.0.1:1997"
 
 type Service struct {
-	mu     sync.Mutex
-	daemon Daemon
-	store  *membership.Store
-	join   JoinFunc
-	local  LocalFunc
+	mu sync.Mutex
+	// joinMu runs one join at a time. A join can wait minutes for an owner's
+	// approval, so it doesn't hold mu meanwhile.
+	joinMu sync.Mutex
+	// codes holds the approval code of each join waiting for an owner, by
+	// invitation code.
+	codesMu sync.Mutex
+	codes   map[string]string
+	daemon  Daemon
+	store   *membership.Store
+	join    JoinFunc
+	local   LocalFunc
 }
 
 type Daemon interface {
@@ -91,11 +98,85 @@ type Response struct {
 	Joined  *JoinResult          `json:"joined,omitempty"`
 	Items   []hubnet.HubListItem `json:"items,omitempty"`
 	Error   string               `json:"error,omitempty"`
+	// ApprovalCode answers joinStatus: the safety code of a join the Hub
+	// holds until an owner approves this device, "" when there's none.
+	ApprovalCode string `json:"approvalCode,omitempty"`
+}
+
+type approvalCodeKey struct{}
+
+// WithApprovalCode gives a join's context the function that receives its
+// approval code (see ReportApprovalCode).
+func WithApprovalCode(ctx context.Context, report func(code string)) context.Context {
+	return context.WithValue(ctx, approvalCodeKey{}, report)
+}
+
+// ReportApprovalCode hands the code a JoinFunc got from the Hub, while the
+// Hub holds the join until an owner approves this device, to joinStatus.
+func ReportApprovalCode(ctx context.Context, code string) {
+	if report, ok := ctx.Value(approvalCodeKey{}).(func(string)); ok && report != nil {
+		report(code)
+	}
+}
+
+func (s *Service) setCode(invitation, code string) {
+	s.codesMu.Lock()
+	defer s.codesMu.Unlock()
+	if s.codes == nil {
+		s.codes = make(map[string]string)
+	}
+	if code == "" {
+		delete(s.codes, invitation)
+	} else {
+		s.codes[invitation] = code
+	}
+}
+
+func (s *Service) code(invitation string) string {
+	s.codesMu.Lock()
+	defer s.codesMu.Unlock()
+	return s.codes[invitation]
+}
+
+// executeJoin runs a join without holding mu: the Hub may hold it for an
+// owner's approval, and list and joinStatus answer meanwhile.
+func (s *Service) executeJoin(ctx context.Context, request Request) Response {
+	response := Response{Version: Version}
+	if request.Code == "" {
+		response.Error = "join code required"
+		return response
+	}
+	if s.join == nil {
+		response.Error = "join unavailable"
+		return response
+	}
+	s.joinMu.Lock()
+	defer s.joinMu.Unlock()
+	defer s.setCode(request.Code, "")
+	ctx = WithApprovalCode(ctx, func(code string) { s.setCode(request.Code, code) })
+	result, err := s.join(ctx, request.Code, request.Own)
+	if err != nil {
+		response.Error = err.Error()
+		return response
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.store.Stage(result.Record); err == nil {
+		var stored membership.Stored
+		stored, err = s.store.Commit(result.Record.ID)
+		if err == nil {
+			err = s.daemon.Add(toSupervisor(stored))
+		}
+	}
+	if err != nil {
+		response.Error = err.Error()
+		return response
+	}
+	response.Joined = &result
+	return response
 }
 
 func (s *Service) Execute(ctx context.Context, request Request) Response {
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	response := Response{Version: Version}
 	if request.Version != Version {
 		response.Error = "unsupported command version"
@@ -103,31 +184,14 @@ func (s *Service) Execute(ctx context.Context, request Request) Response {
 	}
 	switch request.Command {
 	case "join":
-		if request.Code == "" {
-			response.Error = "join code required"
-			break
-		}
-		if s.join == nil {
-			response.Error = "join unavailable"
-			break
-		}
-		result, err := s.join(ctx, request.Code, request.Own)
-		if err != nil {
-			response.Error = err.Error()
-			break
-		}
-		if err := s.store.Stage(result.Record); err == nil {
-			var stored membership.Stored
-			stored, err = s.store.Commit(result.Record.ID)
-			if err == nil {
-				err = s.daemon.Add(toSupervisor(stored))
-			}
-		}
-		if err != nil {
-			response.Error = err.Error()
-			break
-		}
-		response.Joined = &result
+		return s.executeJoin(ctx, request)
+	case "joinStatus":
+		response.ApprovalCode = s.code(request.Code)
+		return response
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	switch request.Command {
 	case "local":
 		if s.local == nil {
 			response.Error = "local hub unavailable"
@@ -419,7 +483,9 @@ func NewServer(path string, service *Service) (*Server, error) {
 		Handler:           http.HandlerFunc(server.handle),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       5 * time.Second,
-		WriteTimeout:      2 * time.Minute,
+		// A join may wait for an owner's approval until its admission expires
+		// (10 minutes at most)
+		WriteTimeout: 12 * time.Minute,
 	}
 	return server, nil
 }
@@ -506,7 +572,7 @@ func NewClient(socketPath string) *Client {
 	transport := &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
 		return (&net.Dialer{}).DialContext(ctx, "unix", socketPath)
 	}}
-	return &Client{http: &http.Client{Transport: transport, Timeout: 3 * time.Minute}}
+	return &Client{http: &http.Client{Transport: transport, Timeout: 13 * time.Minute}}
 }
 
 func (c *Client) Execute(ctx context.Context, request Request) (Response, error) {

@@ -204,6 +204,11 @@ func SendTyped[T any](s *Service, path string, body any, contextValue ...any) (T
 	return result, nil
 }
 
+// Values opens a stream; the caller reads it and calls Return when done.
+func (s *Service) Values(path string, body any, contextValue ...any) (*channelgo.Values, error) {
+	return s.svc.Values(path, body, contextValue...)
+}
+
 // OneValue opens a stream and returns its first value.
 func (s *Service) OneValue(ctx context.Context, path string, body any, contextValue ...any) (any, error) {
 	values, err := s.svc.Values(path, body, contextValue...)

@@ -80,6 +80,12 @@ type JoinOptions struct {
 	// daemon sets it when this device has no firewall backend
 	// (enforcement.JoinCheck).
 	Admit func(owner bool) (warning string, err error)
+	// OnApprovalCode receives this device's safety code when the Hub holds
+	// the bind until an owner approves the device (a member's invitation, or
+	// one from the Hub machine's own agent, which isn't an owner): the owner
+	// approves it in the Hub app once the codes match. The join then waits
+	// for the approval, at most until the inviter's admission expires.
+	OnApprovalCode func(code string)
 	// Logger receives progress. Defaults to a discard logger.
 	Logger *slog.Logger
 	// Timeout bounds the whole join (rendezvous, direct exchange, and bind).
@@ -170,7 +176,7 @@ func Join(ctx context.Context, options JoinOptions) (JoinResult, error) {
 	}
 	binder := options.Binder
 	if binder == nil {
-		binder = hubServiceBinder{device: options.Device}
+		binder = hubServiceBinder{device: options.Device, onCode: options.OnApprovalCode, logger: logger}
 	}
 
 	decoded, err := Decode(options.Code, now())
@@ -309,6 +315,18 @@ func Join(ctx context.Context, options JoinOptions) (JoinResult, error) {
 		}
 		if warning, err = options.Admit(owner); err != nil {
 			return JoinResult{}, err
+		}
+	}
+	// The hub may hold the bind until an owner approves this device, which
+	// takes longer than the rendezvous: that wait gets until the admission
+	// expires, while connecting and binding stay bounded by the join timeout.
+	if hb, ok := binder.(hubServiceBinder); ok {
+		if expiresAt, perr := time.Parse(time.RFC3339Nano, response.ExpiresAt); perr == nil && expiresAt.After(now()) {
+			approvalCtx, cancelApproval := context.WithDeadline(context.WithoutCancel(ctx), expiresAt)
+			defer cancelApproval()
+			defer context.AfterFunc(ctx, cancelApproval)()
+			hb.approvalCtx = approvalCtx
+			binder = hb
 		}
 	}
 	binding, err := binder.Bind(joinCtx, hubAddress, options.Identity, wireGuardKeyB64, "hub-net", response)
@@ -762,18 +780,107 @@ func LoadInviterPeers(path string) ([]wireguard.PeerConfig, error) {
 // hubServiceBinder issues hub/net/bind through the real hub-server service SDK.
 type hubServiceBinder struct {
 	device *hubservice.DeviceKey
+	onCode func(string)
+	logger *slog.Logger
+	// approvalCtx bounds the wait for an owner's approval; nil waits within
+	// the bind's own context.
+	approvalCtx context.Context
 }
 
 func (b hubServiceBinder) Bind(ctx context.Context, address any, id *identity.Identity, wireGuardKey, name string, admission protocol.DirectBootstrapResponse) (BindResult, error) {
-	result, err := bindOnce(ctx, address, id, wireGuardKey, name, admission, b.device)
+	result, err := bindOnce(ctx, address, id, wireGuardKey, name, admission, b.device, b.approval)
 	if err != nil && b.device != nil && strings.Contains(err.Error(), "device_endpoint_exists") {
 		// The hub still counts an earlier agent of this device as connected
 		// (one that went away without closing its connection). Bind the key
 		// alone, as before devices: the session presents the device again on
 		// every connect, and its bind succeeds once the hub lets the old one go.
-		return bindOnce(ctx, address, id, wireGuardKey, name, admission, nil)
+		return bindOnce(ctx, address, id, wireGuardKey, name, admission, nil, nil)
 	}
 	return result, err
+}
+
+// approvalRequired reports whether hub/net/bind was held for an owner's
+// approval of this device (hub-server's approval_required).
+func approvalRequired(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := err.Error()
+	return strings.Contains(message, "approval_required") || strings.Contains(message, "must approve this device")
+}
+
+// deviceRequest is a hub/device/request value: this connection's own request
+// to be approved (protocol.md section 6).
+type deviceRequest struct {
+	Status    string `json:"status"`
+	Name      string `json:"name,omitempty"`
+	CodeValue string `json:"codeValue,omitempty"`
+}
+
+// approval follows hub/device/request on the bind's connection until an owner
+// approves this device. It reports the safety code once the hub gives its
+// value: the code covers the hub key this connection pinned, the device key
+// and that value, so an owner who sees the same code approves this device and
+// no other. It never makes up a code of its own.
+func (b hubServiceBinder) approval(ctx context.Context, svc *hubconn.Service) (context.Context, error) {
+	if b.approvalCtx != nil {
+		ctx = b.approvalCtx
+	}
+	return ctx, b.awaitApproval(ctx, svc)
+}
+
+func (b hubServiceBinder) awaitApproval(ctx context.Context, svc *hubconn.Service) error {
+	if b.device == nil {
+		return errors.New("no device key to approve")
+	}
+	values, err := svc.Values("hub/device/request", nil)
+	if err != nil {
+		return err
+	}
+	defer values.Return()
+	shown := ""
+	for {
+		item, err := values.Next(ctx)
+		if err != nil {
+			return err
+		}
+		if item.Value == nil {
+			if item.Done {
+				return errors.New("hub/device/request ended")
+			}
+			continue
+		}
+		data, err := json.Marshal(item.Value)
+		if err != nil {
+			return err
+		}
+		var request deviceRequest
+		if err := json.Unmarshal(data, &request); err != nil {
+			return fmt.Errorf("hub/device/request: %w", err)
+		}
+		switch request.Status {
+		case "approved":
+			return nil
+		case "pending":
+			hubKey := svc.HubKey()
+			if request.CodeValue == "" || hubKey == "" {
+				continue
+			}
+			code := b.device.SafetyCode(hubKey, request.CodeValue)
+			if code != shown {
+				shown = code
+				if b.logger != nil {
+					b.logger.Info("invitation join: waiting for an owner to approve this device", slog.String("code", code), slog.String("name", request.Name))
+				}
+				if b.onCode != nil {
+					b.onCode(code)
+				}
+			}
+		}
+		if item.Done {
+			return errors.New("hub/device/request ended")
+		}
+	}
 }
 
 // ownerProbePath is a path under hub/, which no service registers: only an
@@ -826,7 +933,11 @@ func (b hubServiceBinder) IsOwner(ctx context.Context, address any, id *identity
 	}
 }
 
-func bindOnce(ctx context.Context, address any, id *identity.Identity, wireGuardKey, name string, admission protocol.DirectBootstrapResponse, device *hubservice.DeviceKey) (BindResult, error) {
+// bindOnce binds over one connection. When the hub holds the bind for an
+// owner's approval and approve is set, it waits through approve on the same
+// connection, which the hub places on the device once approved, and binds
+// again.
+func bindOnce(ctx context.Context, address any, id *identity.Identity, wireGuardKey, name string, admission protocol.DirectBootstrapResponse, device *hubservice.DeviceKey, approve func(context.Context, *hubconn.Service) (context.Context, error)) (BindResult, error) {
 	ready := make(chan struct{})
 	var once sync.Once
 	svc, err := hubconn.New(hubconn.Options{
@@ -845,10 +956,14 @@ func bindOnce(ctx context.Context, address any, id *identity.Identity, wireGuard
 		return BindResult{}, err
 	}
 	defer svc.Stop()
+	connectTimer := time.NewTimer(joinTimeout)
+	defer connectTimer.Stop()
 	select {
 	case <-ready:
 	case <-ctx.Done():
 		return BindResult{}, ctx.Err()
+	case <-connectTimer.C:
+		return BindResult{}, context.DeadlineExceeded
 	}
 	body := protocol.AgentBindRequest{
 		AgentProfileRegistration: protocol.AgentProfileRegistration{
@@ -860,6 +975,15 @@ func bindOnce(ctx context.Context, address any, id *identity.Identity, wireGuard
 		Admission:   &admission,
 	}
 	registered, err := hubconn.SendTyped[bindResponse](svc, "hub/net/bind", body)
+	for approvalRequired(err) && approve != nil {
+		// The steps after the approval run within the approval's deadline:
+		// the join's own may have passed while an owner looked.
+		var waitErr error
+		if ctx, waitErr = approve(ctx, svc); waitErr != nil {
+			return BindResult{}, fmt.Errorf("%w (waiting for an owner to approve this device: %v)", err, waitErr)
+		}
+		registered, err = hubconn.SendTyped[bindResponse](svc, "hub/net/bind", body)
+	}
 	if err != nil {
 		return BindResult{}, err
 	}

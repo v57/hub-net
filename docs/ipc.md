@@ -47,7 +47,8 @@ The Hub app on Linux looks for `/run/hub-net/command.sock`, then `/var/lib/hub-n
 
 | `command` | Effect |
 |---|---|
-| `join` | Joins the invitation's Hub. Returns `joined`. Can take a while: the client waits up to 3 minutes. |
+| `join` | Joins the invitation's Hub. Returns `joined`. Can take a while: when the Hub holds the join until an owner approves this device, it waits for that, up to the invitation admission's 10 minutes; the client waits up to 13. Other commands answer meanwhile. |
+| `joinStatus` | With the `code` of a join in progress: `approvalCode`, this device's safety code while the Hub waits for an owner's approval, else nothing. The CLI asks every second during a join and prints the code. |
 | `local` | Creates the membership for the Hub on this machine. Fails if one exists. Returns `joined.record`. |
 | `list` | Returns `items`, paused memberships included. |
 | `leave` | Leaves a Hub. Leaving a name that doesn't exist succeeds. |
@@ -69,6 +70,7 @@ The Hub app on Linux looks for `/run/hub-net/command.sock`, then `/var/lib/hub-n
 | `version` | Always. |
 | `error` | The command failed. The HTTP status is 400. |
 | `joined` | `join` and `local`: `record` (the stored membership), `virtualHost` (the Hub's host), `virtualIp` (this device's IPv4 overlay address), and `warning` when the join went through with a caveat, such as no firewall to limit the device's ports. |
+| `approvalCode` | `joinStatus`: the code to show, `ddd ddd`. |
 | `items` | `list`: one object per membership with `id`, `alias`, `header` (the Hub's display name), `status`, `nodeUrl`, `gatewayAllowed`, `error`, `overlayIpv4`, `overlayIpv6`, `hubAddress`, and `virtualIpv4`/`virtualIpv6` when set. |
 
 `status` is `starting`, `connected`, `disconnected`, `error`, `stopping` or `paused`.

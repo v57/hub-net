@@ -11,6 +11,7 @@
 //	hubctl -identity owner.identity agent stream net/users
 //	hubctl -identity owner.identity post hub/device/revoke '{"id":"<device id>"}'
 //	hubctl -identity owner.identity stream hub/devices
+//	hubctl -identity owner.identity approve-device [name [code]]
 package main
 
 import (
@@ -85,6 +86,11 @@ func run(args []string) error {
 		return nil
 	case "approve":
 		return approvePending(ctx, svc)
+	case "approve-device":
+		// An owner approves a device waiting to join (Hub app: Devices, with
+		// its code). Waits for one named name (any when empty) whose safety
+		// code is code (any when empty); prints its id and code.
+		return approveDevice(ctx, svc, flags.Arg(1), flags.Arg(2))
 	case "post", "stream":
 		// Calls the hub itself, e.g. hub/devices or hub/device/revoke.
 		if flags.NArg() < 2 {
@@ -153,6 +159,44 @@ func run(args []string) error {
 		return nil
 	default:
 		return fmt.Errorf("unknown command %q", flags.Arg(0))
+	}
+}
+
+// approveDevice follows hub/devices/pending until a device (named name, with
+// safety code code, each when given) waits, approves it and prints
+// "<id> <safety code>".
+func approveDevice(ctx context.Context, svc *hubconn.Service, name, code string) error {
+	type pendingDevice struct {
+		ID         string `json:"id"`
+		Name       string `json:"name"`
+		SafetyCode string `json:"safetyCode"`
+	}
+	values, err := svc.Values("hub/devices/pending", nil)
+	if err != nil {
+		return err
+	}
+	defer values.Return()
+	for {
+		item, err := values.Next(ctx)
+		if err != nil {
+			return err
+		}
+		data, _ := json.Marshal(item.Value)
+		var pending []pendingDevice
+		_ = json.Unmarshal(data, &pending)
+		for _, device := range pending {
+			if (name != "" && device.Name != name) || (code != "" && device.SafetyCode != code) {
+				continue
+			}
+			if _, err := svc.Send("hub/device/approve", map[string]any{"id": device.ID}); err != nil {
+				return err
+			}
+			fmt.Println(device.ID, device.SafetyCode)
+			return nil
+		}
+		if item.Done {
+			return errors.New("hub/devices/pending ended")
+		}
 	}
 }
 
