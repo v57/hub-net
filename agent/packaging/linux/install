@@ -15,11 +15,13 @@ if [ ! -x "$binary" ]; then
   exit 1
 fi
 
-install -d -m 0755 /usr/bin /usr/lib/systemd/system /usr/lib/sysusers.d /usr/lib/tmpfiles.d
+install -d -m 0755 /usr/bin /usr/lib/systemd/system /usr/lib/sysusers.d /usr/lib/tmpfiles.d /usr/share/polkit-1/rules.d
 install -m 0755 "$binary" /usr/bin/hub-net
 install -m 0644 "$script_dir/hub-net.service" /usr/lib/systemd/system/hub-net.service
 install -m 0644 "$script_dir/hub-net.sysusers" /usr/lib/sysusers.d/hub-net.conf
 install -m 0644 "$script_dir/hub-net.tmpfiles" /usr/lib/tmpfiles.d/hub-net.conf
+# systemd-resolved asks polkit before the hub-net user may set its links' split DNS
+install -m 0644 "$script_dir/hub-net.polkit.rules" /usr/share/polkit-1/rules.d/50-hub-net.rules
 
 systemd-sysusers /usr/lib/sysusers.d/hub-net.conf
 systemd-tmpfiles --create /usr/lib/tmpfiles.d/hub-net.conf

@@ -27,7 +27,7 @@ package: build
 		"build/package/$(PACKAGE_NAME)/packaging/linux/update" \
 		"build/package/$(PACKAGE_NAME)/packaging/linux/check-for-updates" \
 		"build/package/$(PACKAGE_NAME)/packaging/linux/uninstall"
-	tar -C build/package -czf "build/$(PACKAGE_NAME).tar.gz" "$(PACKAGE_NAME)"
+	COPYFILE_DISABLE=1 tar --no-xattrs -C build/package -czf "build/$(PACKAGE_NAME).tar.gz" "$(PACKAGE_NAME)"
 	@if command -v sha256sum >/dev/null 2>&1; then \
 		cd build && sha256sum "$(PACKAGE_NAME).tar.gz" > "$(PACKAGE_NAME).tar.gz.sha256"; \
 	else \

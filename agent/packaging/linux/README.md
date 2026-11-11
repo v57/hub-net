@@ -44,6 +44,13 @@ other machines join with `hub-net join <invite>`.
 `hub-net list` shows the session. Without systemd-resolved the tunnel still
 works, but `.hub.invalid` names do not resolve.
 
+systemd-resolved asks polkit before a non-root process changes a link's DNS, so
+`install` adds `/usr/share/polkit-1/rules.d/50-hub-net.rules`: it lets the
+`hub-net` user set and revert DNS servers, domains and the default-route flag
+(`resolvectl dns|domain|default-route|revert` on its `hubnet*` links), nothing
+else. Without it the agent logs "split DNS unavailable ... Interactive
+authentication required" and the tunnel works without names.
+
 ## Ubuntu acceptance
 
 Sync from the Mac source workspace and run all ordinary checks:

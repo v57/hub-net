@@ -11,7 +11,8 @@ rm -f \
   /usr/bin/hub-net \
   /usr/lib/systemd/system/hub-net.service \
   /usr/lib/sysusers.d/hub-net.conf \
-  /usr/lib/tmpfiles.d/hub-net.conf
+  /usr/lib/tmpfiles.d/hub-net.conf \
+  /usr/share/polkit-1/rules.d/50-hub-net.rules
 systemctl daemon-reload
 
 echo "hub-net package removed; identity preserved in /var/lib/hub-net"

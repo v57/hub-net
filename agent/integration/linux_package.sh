@@ -111,10 +111,12 @@ systemctl show hub-net.service \
   -p RestrictAddressFamilies -p StateDirectory -p RuntimeDirectory
 [[ $(stat -c "%U:%G:%a" /usr/bin/hub-net) == root:root:755 ]]
 [[ $(stat -c "%U:%G:%a" /usr/lib/systemd/system/hub-net.service) == root:root:644 ]]
+[[ $(stat -c "%U:%G:%a" /usr/share/polkit-1/rules.d/50-hub-net.rules) == root:root:644 ]]
 
 bun "$launcher_driver" uninstall hub-net.service \
   "$work_dir/$new_name/packaging/linux/uninstall"
 [[ ! -e /usr/bin/hub-net ]]
+[[ ! -e /usr/share/polkit-1/rules.d/50-hub-net.rules ]]
 if [[ -n "$identity_before" ]]; then
   [[ $(sha256sum /var/lib/hub-net/profile.identity | awk '{print $1}') == "$identity_before" ]]
 fi
