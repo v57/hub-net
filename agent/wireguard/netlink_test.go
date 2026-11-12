@@ -213,3 +213,30 @@ func TestEndpointSockaddr(t *testing.T) {
 		t.Fatal("hostnames are not valid endpoints")
 	}
 }
+
+// The kernel reports a peer's endpoint as the sockaddr it takes.
+func TestSockaddrEndpointReadsWhatEndpointSockaddrWrites(t *testing.T) {
+	for _, endpoint := range []string{"192.168.1.6:51820", "[fd48:5542:4e45::1]:1964", "[2001:db8::7]:60000"} {
+		sockaddr, err := endpointSockaddr(endpoint)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, ok := sockaddrEndpoint(sockaddr)
+		if !ok || got.String() != endpoint {
+			t.Fatalf("%s read back as %v (%v)", endpoint, got, ok)
+		}
+	}
+	// A v4-mapped sockaddr_in6, as a dual-stack socket can report
+	mapped := make([]byte, 28)
+	binary.NativeEndian.PutUint16(mapped[0:2], sockaddrFamilyInet6)
+	binary.BigEndian.PutUint16(mapped[2:4], 4500)
+	copy(mapped[8:24], []byte{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff, 185, 117, 120, 25})
+	if got, ok := sockaddrEndpoint(mapped); !ok || got.String() != "185.117.120.25:4500" {
+		t.Fatalf("v4-mapped endpoint = %v (%v)", got, ok)
+	}
+	for _, bad := range [][]byte{nil, {2, 0}, make([]byte, 16)} {
+		if got, ok := sockaddrEndpoint(bad); ok {
+			t.Fatalf("%x read as %v", bad, got)
+		}
+	}
+}

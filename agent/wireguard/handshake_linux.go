@@ -15,6 +15,17 @@ import (
 // LastHandshakes reads each peer's latest handshake from the kernel
 // (WG_CMD_GET_DEVICE). The adapter's cached configuration does not know it.
 func (a *linuxAdapter) LastHandshakes() (map[string]time.Time, error) {
+	statuses, err := a.PeerStatuses()
+	if err != nil {
+		return nil, err
+	}
+	return lastHandshakes(statuses), nil
+}
+
+// PeerStatuses reads each peer's latest handshake and current endpoint from
+// the kernel (WG_CMD_GET_DEVICE). The adapter's cached configuration knows
+// neither: the module follows a peer's packets to a new endpoint.
+func (a *linuxAdapter) PeerStatuses() (map[string]PeerStatus, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if !a.up {
@@ -30,37 +41,31 @@ func (a *linuxAdapter) LastHandshakes() (map[string]time.Time, error) {
 	if err := a.send(w.Bytes()); err != nil {
 		return nil, fmt.Errorf("wireguard: get device: %w", err)
 	}
-	out := make(map[string]time.Time)
-	for {
-		chunk, err := recvNetlink(a.fd)
-		if err != nil {
-			return nil, fmt.Errorf("wireguard: get device: %w", err)
-		}
-		for _, msg := range splitMessages(chunk) {
-			msgType, _, body, err := parseNlmsghdr(msg)
-			if err != nil {
-				return nil, err
-			}
-			switch msgType {
-			case unix.NLMSG_DONE:
-				return out, nil
-			case unix.NLMSG_ERROR:
-				if err := ackOrError(msg); err != nil {
-					return nil, fmt.Errorf("wireguard: get device: %w", err)
-				}
-				return out, nil
-			}
-			if len(body) < genlmsghdrLen {
-				continue
-			}
-			parseDeviceHandshakes(body[genlmsghdrLen:], out)
-		}
+	reply, err := a.recv()
+	if err != nil {
+		return nil, fmt.Errorf("wireguard: get device: %w", err)
 	}
+	if err := ackOrError(reply); err != nil {
+		return nil, fmt.Errorf("wireguard: get device: %w", err)
+	}
+	out := make(map[string]PeerStatus)
+	for _, msg := range splitMessages(reply) {
+		msgType, _, body, err := parseNlmsghdr(msg)
+		if err != nil {
+			return nil, err
+		}
+		if msgType == unix.NLMSG_DONE || msgType == unix.NLMSG_ERROR || len(body) < genlmsghdrLen {
+			continue
+		}
+		parseDevicePeers(body[genlmsghdrLen:], out)
+	}
+	return out, nil
 }
 
-// parseDeviceHandshakes walks the WGDEVICE_A_* attributes of one GET_DEVICE
-// reply and records each peer's WGPEER_A_LAST_HANDSHAKE_TIME.
-func parseDeviceHandshakes(attributes []byte, out map[string]time.Time) {
+// parseDevicePeers walks the WGDEVICE_A_* attributes of one GET_DEVICE reply
+// and records each peer's WGPEER_A_LAST_HANDSHAKE_TIME and WGPEER_A_ENDPOINT.
+// A large device's reply spans several messages, each with some of the peers.
+func parseDevicePeers(attributes []byte, out map[string]PeerStatus) {
 	const nested = 0x8000
 	device := newNlmsgReader(attributes, 0)
 	for {
@@ -78,7 +83,7 @@ func parseDeviceHandshakes(attributes []byte, out map[string]time.Time) {
 				break
 			}
 			var key []byte
-			var at time.Time
+			var status PeerStatus
 			fields := newNlmsgReader(peer, 0)
 			for {
 				fieldType, value, ok := fields.Next()
@@ -94,13 +99,17 @@ func parseDeviceHandshakes(attributes []byte, out map[string]time.Time) {
 						seconds := int64(binary.NativeEndian.Uint64(value[0:8]))
 						nanoseconds := int64(binary.NativeEndian.Uint64(value[8:16]))
 						if seconds != 0 || nanoseconds != 0 {
-							at = time.Unix(seconds, nanoseconds)
+							status.LastHandshake = time.Unix(seconds, nanoseconds)
 						}
+					}
+				case unix.WGPEER_A_ENDPOINT:
+					if endpoint, ok := sockaddrEndpoint(value); ok {
+						status.Endpoint = endpoint
 					}
 				}
 			}
-			if len(key) == 32 && !at.IsZero() {
-				out[base64.StdEncoding.EncodeToString(key)] = at
+			if len(key) == 32 {
+				out[base64.StdEncoding.EncodeToString(key)] = status
 			}
 		}
 	}

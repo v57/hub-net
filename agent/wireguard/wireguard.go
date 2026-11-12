@@ -8,6 +8,7 @@
 package wireguard
 
 import (
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"net/netip"
@@ -49,6 +50,33 @@ type PeerConfig struct {
 // key. A peer without a handshake yet is absent.
 type HandshakeReporter interface {
 	LastHandshakes() (map[string]time.Time, error)
+}
+
+// PeerStatus is what the tunnel knows about one peer now.
+type PeerStatus struct {
+	// LastHandshake is the latest completed handshake, zero before the first.
+	LastHandshake time.Time
+	// Endpoint is where WireGuard sends to the peer: the endpoint it was
+	// given, or where the peer's authenticated packets last came from (the
+	// Linux module and WireGuardNT follow them). Invalid when it has none.
+	Endpoint netip.AddrPort
+}
+
+// PeerStatusReporter is implemented by adapters that can read each peer's
+// status from the tunnel, keyed by the base64 public key.
+type PeerStatusReporter interface {
+	PeerStatuses() (map[string]PeerStatus, error)
+}
+
+// lastHandshakes keeps the peers of statuses that completed a handshake.
+func lastHandshakes(statuses map[string]PeerStatus) map[string]time.Time {
+	out := make(map[string]time.Time, len(statuses))
+	for key, status := range statuses {
+		if !status.LastHandshake.IsZero() {
+			out[key] = status.LastHandshake
+		}
+	}
+	return out
 }
 
 // InterfaceConfig is the full per-profile WireGuard interface configuration.
@@ -147,6 +175,28 @@ func (f *FakeAdapter) LastHandshakes() (map[string]time.Time, error) {
 	out := make(map[string]time.Time, len(f.handshakes))
 	for key, at := range f.handshakes {
 		out[key] = at
+	}
+	return out, nil
+}
+
+// PeerStatuses reports the handshakes SetLastHandshake recorded and each
+// configured peer's endpoint.
+func (f *FakeAdapter) PeerStatuses() (map[string]PeerStatus, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make(map[string]PeerStatus)
+	for key, at := range f.handshakes {
+		out[key] = PeerStatus{LastHandshake: at}
+	}
+	for _, peer := range f.peers {
+		endpoint, err := netip.ParseAddrPort(peer.Endpoint)
+		if err != nil {
+			continue
+		}
+		key := base64.StdEncoding.EncodeToString(peer.PublicKey)
+		status := out[key]
+		status.Endpoint = endpoint
+		out[key] = status
 	}
 	return out, nil
 }

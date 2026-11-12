@@ -212,6 +212,28 @@ func endpointSockaddr(endpoint string) ([]byte, error) {
 	return out, nil
 }
 
+// sockaddrEndpoint reads the sockaddr_in or sockaddr_in6 of a
+// WGPEER_A_ENDPOINT attribute, the reverse of endpointSockaddr.
+func sockaddrEndpoint(sockaddr []byte) (netip.AddrPort, bool) {
+	if len(sockaddr) < 4 {
+		return netip.AddrPort{}, false
+	}
+	port := binary.BigEndian.Uint16(sockaddr[2:4])
+	switch binary.NativeEndian.Uint16(sockaddr[0:2]) {
+	case sockaddrFamilyInet4:
+		if len(sockaddr) < 8 {
+			return netip.AddrPort{}, false
+		}
+		return netip.AddrPortFrom(netip.AddrFrom4([4]byte(sockaddr[4:8])), port), true
+	case sockaddrFamilyInet6:
+		if len(sockaddr) < 24 {
+			return netip.AddrPort{}, false
+		}
+		return netip.AddrPortFrom(netip.AddrFrom16([16]byte(sockaddr[8:24])).Unmap(), port), true
+	}
+	return netip.AddrPort{}, false
+}
+
 // validateEndpoints rejects peer endpoints that are not "ip:port" literals.
 func validateEndpoints(peers ...PeerConfig) error {
 	for _, peer := range peers {

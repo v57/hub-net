@@ -9,6 +9,7 @@
 package wireguard
 
 import (
+	"encoding/base64"
 	"encoding/binary"
 	"errors"
 	"net/netip"
@@ -455,6 +456,25 @@ func TestLinuxAdapterLifecycle(t *testing.T) {
 	}
 	if err := a.AddPeer(peer); err != nil {
 		t.Fatalf("AddPeer: %v", err)
+	}
+	// The kernel reports the peer's endpoint (none yet), then the one given
+	peer.Endpoint = "192.0.2.1:51820"
+	statuses, err := a.PeerStatuses()
+	if err != nil {
+		t.Fatalf("PeerStatuses: %v", err)
+	}
+	status, listed := statuses[base64.StdEncoding.EncodeToString(peer.PublicKey)]
+	if !listed || status.Endpoint.IsValid() || !status.LastHandshake.IsZero() {
+		t.Fatalf("status before an endpoint = %+v (listed %v)", status, listed)
+	}
+	if err := a.AddPeer(peer); err != nil {
+		t.Fatalf("AddPeer with endpoint: %v", err)
+	}
+	if statuses, err = a.PeerStatuses(); err != nil {
+		t.Fatalf("PeerStatuses: %v", err)
+	}
+	if got := statuses[base64.StdEncoding.EncodeToString(peer.PublicKey)].Endpoint; got != netip.MustParseAddrPort(peer.Endpoint) {
+		t.Fatalf("kernel endpoint = %v, want %s", got, peer.Endpoint)
 	}
 	if err := a.RemovePeer(peer.PublicKey); err != nil {
 		t.Fatalf("RemovePeer: %v", err)

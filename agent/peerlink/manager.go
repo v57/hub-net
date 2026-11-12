@@ -62,6 +62,10 @@ type Dependencies struct {
 	// LastHandshake reports the latest handshake with the peer of a base64
 	// WireGuard key.
 	LastHandshake func(wireGuardKey string) (time.Time, bool)
+	// LiveEndpoint reports where WireGuard sends to the peer of a base64
+	// WireGuard key now ("ip:port"): the endpoint it was given, or where the
+	// peer's packets last came from. Nil or false when it can't tell.
+	LiveEndpoint func(wireGuardKey string) (string, bool)
 	// Candidates are this device's host candidates for link.offer (LAN,
 	// global IPv6) with WireGuard's port.
 	Candidates func() []models.LinkEndpoint
@@ -90,6 +94,9 @@ type attempt struct {
 	stopProbe  context.CancelFunc
 	punching   bool
 	stopPunch  context.CancelFunc
+	// punch counts the punches started for this link: a later link.ready
+	// cancels the running one and starts another, which owns the attempt.
+	punch int
 }
 
 // Manager runs this device's links. The opening side (`a`) asks the node for
@@ -120,8 +127,10 @@ type Manager struct {
 	// delivered are the grants whose link came up, by id: a new grant opens
 	// the link again even while the path is live.
 	delivered map[string]bool
-	present   bool
-	applied   []Peer
+	// trying counts the punches in their trials, by the other device's key.
+	trying  map[string]int
+	present bool
+	applied []Peer
 }
 
 // New returns a manager for the device with service key ownKey.
@@ -144,6 +153,7 @@ func New(ownKey string, deps Dependencies) *Manager {
 		attempts:  make(map[string]*attempt),
 		opening:   make(map[string]bool),
 		delivered: make(map[string]bool),
+		trying:    make(map[string]int),
 	}
 }
 
@@ -333,29 +343,17 @@ func (m *Manager) ready(envelope protocol.Envelope) {
 		}
 	}
 	ordered := ReachableFirst(valid, own)
-	linkID := envelope.LinkID
-	link := current.link
-	// A link opened again for a new grant over a path that still works keeps
-	// its endpoint
-	if peer, ok := m.peers[link.Other.Key]; ok && peer.Endpoint != "" && m.isLive(link) {
-		for _, endpoint := range ordered {
-			if endpointString(endpoint) == peer.Endpoint {
-				m.delivered[link.Grant.GrantID] = true
-				m.log.Info("link renewed", slog.String("link", short(linkID)), slog.String("peer", tail(link.Other.Key)), slog.String("at", peer.Endpoint))
-				m.finish(linkID)
-				return
-			}
-		}
-	}
 	if len(ordered) == 0 {
 		return
 	}
-	go m.punch(ctx, linkID, link, ordered, punchAt)
+	current.punch++
+	go m.punch(ctx, envelope.LinkID, current.link, current.punch, ordered, punchAt)
 }
 
 // punch tries each endpoint until a handshake with the peer completes, from
-// punchAt on, for up to punchWindow. It runs off the event goroutine.
-func (m *Manager) punch(ctx context.Context, linkID string, link Link, endpoints []models.LinkEndpoint, punchAt time.Time) {
+// punchAt on, for up to punchWindow, unless the path already works. It runs
+// off the event goroutine.
+func (m *Manager) punch(ctx context.Context, linkID string, link Link, generation int, endpoints []models.LinkEndpoint, punchAt time.Time) {
 	if wait := punchAt.Sub(m.now()); wait > 0 {
 		if wait > 5*time.Second {
 			wait = 5 * time.Second
@@ -364,15 +362,92 @@ func (m *Manager) punch(ctx context.Context, linkID string, link Link, endpoints
 			return
 		}
 	}
+	if ctx.Err() != nil {
+		return
+	}
+	// A path that already works keeps its endpoint: a link opened again for a
+	// new grant, or a tunnel that just started and reached the other side
+	// before the link was ready (at the profile's endpoint for the hub's
+	// machine, or where the other side's handshake came from). WireGuard
+	// renews a session only every two minutes, so no trial would see a
+	// handshake newer than the punch, and trying the other endpoints would
+	// only take the path away: the punch would find nothing, and the next link
+	// would keep whichever endpoint the trials left (H-032, H-031 in the Apple
+	// app). WireGuard's own endpoint counts first, since it follows the other
+	// side's packets. The other side must still be there: after a network
+	// change its old mapping can look live for a while, but it isn't among the
+	// endpoints offered now, and punching is needed. Checked once the wait is
+	// over, so a handshake another link to the same device made meanwhile
+	// counts too: anything older than the punch's start is seen here,
+	// anything newer by the trials. Not while another link's trials to the
+	// same device are under way: the endpoint is then just the one being tried
+	live := ""
+	if m.deps.LiveEndpoint != nil {
+		if endpoint, ok := m.deps.LiveEndpoint(link.Other.WireGuardKey); ok {
+			live = normalized(endpoint)
+		}
+	}
+	key := link.Other.Key
+	settled := make(chan bool, 1)
+	m.post(func() {
+		if !m.owns(linkID, generation) {
+			settled <- true
+			return
+		}
+		recorded := ""
+		peer, known := m.peers[key]
+		if known {
+			recorded = peer.Endpoint
+		}
+		if m.trying[key] == 0 && m.isLive(link) {
+			for _, candidate := range []string{live, recorded} {
+				if candidate == "" || !slices.ContainsFunc(endpoints, func(e models.LinkEndpoint) bool { return endpointString(e) == candidate }) {
+					continue
+				}
+				m.delivered[link.Grant.GrantID] = true
+				if known && recorded != candidate {
+					peer.Endpoint = candidate
+					m.peers[key] = peer
+					m.apply(false)
+				}
+				if recorded == "" {
+					m.log.Info("link up, reached before the link", slog.String("link", short(linkID)), slog.String("peer", tail(key)), slog.String("at", candidate))
+				} else {
+					m.log.Info("link renewed", slog.String("link", short(linkID)), slog.String("peer", tail(key)), slog.String("at", candidate))
+				}
+				m.finish(linkID)
+				settled <- true
+				return
+			}
+		}
+		m.trying[key]++
+		settled <- false
+	})
+	select {
+	case done := <-settled:
+		if done {
+			return
+		}
+	case <-m.done:
+		return
+	}
+	defer m.post(func() {
+		if m.trying[key]--; m.trying[key] <= 0 {
+			delete(m.trying, key)
+		}
+	})
 	started := m.now()
 	deadline := started.Add(punchWindow)
 	for index := 0; m.now().Before(deadline); index++ {
 		endpoint := endpointString(endpoints[index%len(endpoints)])
 		m.post(func() {
-			peer, ok := m.peers[link.Other.Key]
+			if !m.owns(linkID, generation) {
+				return
+			}
+			peer, ok := m.peers[key]
 			if ok && peer.Endpoint != endpoint {
 				peer.Endpoint = endpoint
-				m.peers[link.Other.Key] = peer
+				m.peers[key] = peer
 				m.apply(false)
 			}
 		})
@@ -383,8 +458,11 @@ func (m *Manager) punch(ctx context.Context, linkID string, link Link, endpoints
 		for m.now().Before(trialEnd) {
 			if last, ok := m.deps.LastHandshake(link.Other.WireGuardKey); ok && !last.Before(started.Add(-time.Second)) {
 				m.post(func() {
+					if !m.owns(linkID, generation) {
+						return
+					}
 					m.delivered[link.Grant.GrantID] = true
-					m.log.Info("link up", slog.String("link", short(linkID)), slog.String("peer", tail(link.Other.Key)), slog.String("at", endpoint))
+					m.log.Info("link up", slog.String("link", short(linkID)), slog.String("peer", tail(key)), slog.String("at", endpoint))
 					m.finish(linkID)
 				})
 				return
@@ -394,10 +472,22 @@ func (m *Manager) punch(ctx context.Context, linkID string, link Link, endpoints
 			}
 		}
 	}
+	// A later link.ready for the same link (the node can send more endpoints)
+	// cancelled this punch and started another: that one owns the attempt now
 	m.post(func() {
-		m.log.Warn("link found no path", slog.String("link", short(linkID)), slog.String("peer", tail(link.Other.Key)))
+		if ctx.Err() != nil || !m.owns(linkID, generation) {
+			return
+		}
+		m.log.Warn("link found no path", slog.String("link", short(linkID)), slog.String("peer", tail(key)))
 		m.finish(linkID)
 	})
+}
+
+// owns reports whether the punch numbered generation is still the one
+// running for the link.
+func (m *Manager) owns(linkID string, generation int) bool {
+	current, ok := m.attempts[linkID]
+	return ok && current.punch == generation
 }
 
 func (m *Manager) openWhereNeeded() {
@@ -692,6 +782,16 @@ func unique(endpoints []models.LinkEndpoint) []models.LinkEndpoint {
 		}
 	}
 	return out
+}
+
+// normalized writes an "ip:port" endpoint as endpointString does, so an
+// IPv4-mapped address matches its IPv4 form.
+func normalized(endpoint string) string {
+	parsed, err := netip.ParseAddrPort(endpoint)
+	if err != nil {
+		return ""
+	}
+	return netip.AddrPortFrom(parsed.Addr().Unmap().WithZone(""), parsed.Port()).String()
 }
 
 func endpointString(endpoint models.LinkEndpoint) string {

@@ -22,6 +22,7 @@ import (
 	"github.com/v57/hub-net/deviceports"
 	"github.com/v57/hub-net/enforcement"
 	"github.com/v57/hub-net/peerlink"
+	"github.com/v57/hub-net/wireguard"
 )
 
 // A Hub-signed grant is everything a Hub can say about this device: a peer, its
@@ -178,5 +179,25 @@ func TestThePresenceSecretStaysInAFileOnlyTheOwnerReads(t *testing.T) {
 	a.setPresenceSecret("not base64!")
 	if a.loadPresenceSecret() != nil {
 		t.Fatal("kept an unreadable secret")
+	}
+}
+
+// The link manager reads WireGuard's own endpoint for a peer (H-032): the
+// profile's endpoint for the hub's machine until a link or the peer's packets
+// move it.
+func TestLiveEndpointIsWireGuardsEndpointForThePeer(t *testing.T) {
+	adapter := wireguard.NewFakeAdapter()
+	key := bytes.Repeat([]byte{7}, 32)
+	if err := adapter.Up(wireguard.InterfaceConfig{Name: "hubnet0", Peers: []wireguard.PeerConfig{{
+		PublicKey: key, AllowedIPs: []netip.Prefix{netip.MustParsePrefix("100.96.0.1/32")}, Endpoint: "[::ffff:192.168.1.6]:51820",
+	}}}); err != nil {
+		t.Fatal(err)
+	}
+	a := &Agent{adapter: adapter}
+	if endpoint, ok := a.liveEndpoint(base64.StdEncoding.EncodeToString(key)); !ok || endpoint != "192.168.1.6:51820" {
+		t.Fatalf("live endpoint = %q (%v), want 192.168.1.6:51820", endpoint, ok)
+	}
+	if endpoint, ok := a.liveEndpoint(base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{8}, 32))); ok {
+		t.Fatalf("a peer WireGuard doesn't have has endpoint %q", endpoint)
 	}
 }

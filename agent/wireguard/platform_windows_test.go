@@ -4,6 +4,7 @@ package wireguard
 
 import (
 	"crypto/rand"
+	"encoding/base64"
 	"errors"
 	"net/netip"
 	"os"
@@ -189,6 +190,14 @@ func TestWindowsAdapterLifecycle(t *testing.T) {
 			t.Fatal("no handshake between the two adapters")
 		}
 		time.Sleep(200 * time.Millisecond)
+	}
+	// WireGuardNT reports the endpoint it sends to b
+	statuses, err := adopted.(PeerStatusReporter).PeerStatuses()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := statuses[base64.StdEncoding.EncodeToString(pubB)].Endpoint; got != netip.MustParseAddrPort("127.0.0.1:51902") {
+		t.Fatalf("endpoint of b = %v, want 127.0.0.1:51902", got)
 	}
 	_ = closeAdapter("hubnet-test-b")
 

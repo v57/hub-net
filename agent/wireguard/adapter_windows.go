@@ -394,6 +394,18 @@ func (a *windowsAdapter) State() (InterfaceConfig, bool) {
 // LastHandshakes reads each peer's latest handshake from WireGuardNT, keyed by
 // the base64 public key; peers that never completed one are left out.
 func (a *windowsAdapter) LastHandshakes() (map[string]time.Time, error) {
+	statuses, err := a.PeerStatuses()
+	if err != nil {
+		return nil, err
+	}
+	return lastHandshakes(statuses), nil
+}
+
+// PeerStatuses reads each peer's latest handshake and current endpoint from
+// WireGuardNT, keyed by the base64 public key. The driver follows a peer's
+// packets to a new endpoint, which the adapter's cached configuration
+// doesn't know.
+func (a *windowsAdapter) PeerStatuses() (map[string]PeerStatus, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if !a.up {
@@ -407,12 +419,17 @@ func (a *windowsAdapter) LastHandshakes() (map[string]time.Time, error) {
 	if err != nil {
 		return nil, fmt.Errorf("wireguard: get configuration: %w", err)
 	}
-	out := make(map[string]time.Time)
+	out := make(map[string]PeerStatus)
 	peer := configuration.FirstPeer()
 	for i := uint32(0); i < configuration.PeerCount; i++ {
+		var status PeerStatus
 		if peer.LastHandshake != 0 {
-			out[base64.StdEncoding.EncodeToString(peer.PublicKey[:])] = filetimeToTime(peer.LastHandshake)
+			status.LastHandshake = filetimeToTime(peer.LastHandshake)
 		}
+		if endpoint := peer.Endpoint.AddrPort(); endpoint.Addr().IsValid() && endpoint.Port() != 0 {
+			status.Endpoint = netip.AddrPortFrom(endpoint.Addr().Unmap(), endpoint.Port())
+		}
+		out[base64.StdEncoding.EncodeToString(peer.PublicKey[:])] = status
 		peer = peer.NextPeer()
 	}
 	return out, nil

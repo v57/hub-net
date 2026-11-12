@@ -73,6 +73,7 @@ func (a *Agent) newLinkManager() (*peerlink.Manager, error) {
 		},
 		Apply:         a.applyLinkPeers,
 		LastHandshake: a.lastHandshake,
+		LiveEndpoint:  a.liveEndpoint,
 		Candidates:    a.linkCandidates,
 		Logger:        a.logger,
 	}), nil
@@ -252,6 +253,25 @@ func (a *Agent) lastHandshake(wireGuardKey string) (time.Time, bool) {
 	}
 	at, ok := handshakes[wireGuardKey]
 	return at, ok
+}
+
+// liveEndpoint is where WireGuard sends to the peer now: the profile's
+// endpoint for the hub's machine, the one a link set, or where the peer's
+// packets last came from.
+func (a *Agent) liveEndpoint(wireGuardKey string) (string, bool) {
+	reporter, ok := a.adapter.(wireguard.PeerStatusReporter)
+	if !ok {
+		return "", false
+	}
+	statuses, err := reporter.PeerStatuses()
+	if err != nil {
+		return "", false
+	}
+	endpoint := statuses[wireGuardKey].Endpoint
+	if !endpoint.IsValid() {
+		return "", false
+	}
+	return netip.AddrPortFrom(endpoint.Addr().Unmap(), endpoint.Port()).String(), true
 }
 
 // linkCandidates are this device's host candidates for link.offer: the
