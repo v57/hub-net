@@ -648,8 +648,34 @@ func (a *linuxAdapter) sendOn(fd int, msg []byte) error {
 	return unix.Sendto(fd, msg, 0, sa)
 }
 
+// recv reads the reply to the request just sent on the genetlink socket.
 func (a *linuxAdapter) recv() ([]byte, error) {
-	return recvNetlink(a.fd)
+	return recvReply(a.fd, a.seq)
+}
+
+// recvReply reads the messages answering request seq, up to its NLMSG_ERROR
+// (the ACK or an error) or NLMSG_DONE (a dump's end), and drops messages
+// left from earlier requests. Genetlink answers a request with NLM_F_ACK in
+// two datagrams, the reply and then the ACK, so one read leaves the ACK for
+// the next request, and every reply after it would be one request late.
+func recvReply(fd int, seq uint32) ([]byte, error) {
+	var out []byte
+	for {
+		chunk, err := recvNetlink(fd)
+		if err != nil {
+			return nil, err
+		}
+		for _, msg := range splitMessages(chunk) {
+			if binary.LittleEndian.Uint32(msg[8:]) != seq {
+				continue
+			}
+			out = append(out, msg...)
+			out = append(out, make([]byte, nlaAlign(len(msg))-len(msg))...)
+			if msgType := binary.LittleEndian.Uint16(msg[4:]); msgType == unix.NLMSG_ERROR || msgType == unix.NLMSG_DONE {
+				return out, nil
+			}
+		}
+	}
 }
 
 func recvNetlink(fd int) ([]byte, error) {
