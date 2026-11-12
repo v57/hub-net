@@ -10,9 +10,9 @@ import (
 	"net/url"
 	"time"
 
-	"github.com/v57/channel-go/channelgo"
 	"github.com/v57/hub-net-node/identity"
 	"github.com/v57/hub-net/hubconn"
+	hubservice "github.com/v57/hub-service-go"
 )
 
 const InvitePath = "net/invite"
@@ -21,14 +21,21 @@ const InvitePath = "net/invite"
 // registration, e.g. right after the agent connected.
 const inviteOnlineWait = 10 * time.Second
 
+// HoldPath keeps an invitation's joiner waiting for an owner (protocol.md section 10)
+const HoldPath = "hub/net/invitations/hold"
+
 // RegisterInviteService exposes agent-owned compact invitation creation.
 // online reports whether the agent is registered with hub-net-node as an
 // inviter; the node rejects joins while it is not, so no code is issued then.
+// A code made for a caller who isn't an owner is held first (HoldPath), so the
+// device that joins with it waits for an owner although this agent signed it
+// (security decisions 1.0, Hub 4; Hub app H-034); without the hold it isn't
+// handed out.
 func RegisterInviteService(svc *hubconn.Service, id *identity.Identity, endpoint func() string, online func() bool) error {
 	if svc == nil || id == nil || online == nil {
 		return fmt.Errorf("invitation: service, identity and online state required")
 	}
-	svc.Post(InvitePath, func(channelgo.Body) (any, error) {
+	svc.PostRequest(InvitePath, func(request hubservice.Request) (any, error) {
 		if endpoint() == "" {
 			return nil, errNoNode
 		}
@@ -38,11 +45,50 @@ func RegisterInviteService(svc *hubconn.Service, id *identity.Identity, endpoint
 			}
 			time.Sleep(100 * time.Millisecond)
 		}
-		return CreateCode(id, endpoint())
+		code, err := CreateCode(id, endpoint())
+		if err != nil {
+			return nil, err
+		}
+		hold, err := Hold(code, request.Caller, time.Now())
+		if err != nil {
+			return nil, err
+		}
+		if hold != nil {
+			if _, err := svc.Send(HoldPath, hold); err != nil {
+				return nil, fmt.Errorf("invitation: the hub couldn't keep this invitation waiting for an owner's approval, so it wasn't made: %w", err)
+			}
+		}
+		return code, nil
 	}, hubconn.Settings{Permissions: &hubconn.Permissions{
 		Group: "Hub Network", Name: "Invite to Hub Net",
 	}})
 	return nil
+}
+
+// Hold is what InvitePath holds for a code it made for caller: nothing for an
+// owner, else the invitation's replay id, expiry and who asked for it. A hub
+// that names no caller is held too: it's who the hub can't vouch for.
+func Hold(code string, caller *hubservice.Caller, now time.Time) (map[string]any, error) {
+	if caller != nil && caller.Owner {
+		return nil, nil
+	}
+	decoded, err := Decode(code, now)
+	if err != nil {
+		return nil, fmt.Errorf("invitation: %w", err)
+	}
+	by := map[string]any{}
+	if caller != nil {
+		if caller.Key != "" {
+			by["key"] = caller.Key
+		}
+		if caller.Device != nil {
+			by["device"] = caller.Device.ID
+			if caller.Device.Name != "" {
+				by["name"] = caller.Device.Name
+			}
+		}
+	}
+	return map[string]any{"replayId": decoded.Envelope.TokenID, "expiresAt": decoded.Envelope.ExpiresAt, "by": by}, nil
 }
 
 // errNoNode refuses invitations while no hub-net-node is set (hub/net/node).

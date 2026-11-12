@@ -152,6 +152,12 @@ func (s *Service) Post(path string, action channelgo.Function, settings Settings
 	}, apiSettings(settings))
 }
 
+// PostRequest registers a request/response API whose handler sees the caller the
+// hub names (nil from hubs that send none or whose key isn't pinned).
+func (s *Service) PostRequest(path string, action func(hubservice.Request) (any, error), settings Settings) {
+	s.svc.PostRequest(path, action, apiSettings(settings))
+}
+
 // Stream registers a streaming API. The emitter reports cancellation once the
 // caller cancels the stream.
 func (s *Service) Stream(path string, action channelgo.StreamFunction, settings Settings) {
